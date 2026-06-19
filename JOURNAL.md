@@ -1,3 +1,18 @@
+Kind of want to start with a prototype
+components:
+
+- touchscreen
+- xiao esp32 (mcu & internet)
+- camera module (not built-in, want to customize the position in final phone)
+
+I want to wire everything together/breadboard it
+and then I can work on the software/whatever website API thing I'll build that looks like the slap.com
+| some inspo |
+| -- |
+| ![the slap.com from victorious](https://static.wikia.nocookie.net/victorious/images/b/b4/PearPhone-horizontal.png/revision/latest/scale-to-width-down/1200?cb=20110825192536) |
+
+---
+
 find footprints & symbols on snap eda:
 
 - 3d models (for render)
