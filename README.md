@@ -1,8 +1,8 @@
 # pear-phone
 
-
 # good tutorials
-[firmware](https://www.youtube.com/watch?v=GGGEvKVZpJQ)
+
+[Touchscreen to S3 video](https://www.youtube.com/watch?v=GGGEvKVZpJQ) and [documentation](https://mostlybuilds.com/esp32-spi-capacitive-touchscreen-tutorial/)
 
 # components
 
