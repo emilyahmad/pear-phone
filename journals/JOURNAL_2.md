@@ -22,7 +22,7 @@
 
 #### Remaining pins (free GPIOs)
 
-| display | s3  | fx  |
+| display | c3  | fx  |
 | ------- | --- | --- |
 | LCD_CS  | D6  | ?   |
 | LCD_RST | D5  | ?   |
@@ -33,16 +33,16 @@
 
 ![Example touch wiring](/images/TouchWiringExample.png)
 
-| touch   | esp32 | esps3 | fx            |
-| ------- | ----- | ----- | ------------- |
-| CTP_SCL | 33    | 8     | Touch Sensing |
-| CTP_RST | 13    | 9     | MISO          |
-| CTP_SDA | 32    | ?     | GPIO          |
-| CTP_INT | 34    | ?     | input only    |
+| touch   | esp32 | c3  | fx            |
+| ------- | ----- | --- | ------------- |
+| CTP_SCL | 33    | 8   | Touch Sensing |
+| CTP_RST | 13    | 9   | MISO          |
+| CTP_SDA | 32    | ?   | GPIO          |
+| CTP_INT | 34    | ?   | input only    |
 
 #### Oh apparently I can just wire the touch screen pins to any GPIOs.
 
-| touch   | s3  | Notes         |
+| touch   | c3  | Notes         |
 | ------- | --- | ------------- |
 | CTP_SCL | 0   | Touch sensing |
 | CTP_RST | 2   | MISO          |
@@ -60,149 +60,160 @@
 #### Install LovyanGFX 1.2.19, new tab and create an lgfx_config.h file
 
 ```
-/*******************************************************************************
- *  MostlyBuilds - ESP32 SPI Capacitive Touchscreen Tutorial
- *  Author: MostlyBuilds
- *  Guide:  https://mostlybuilds.com/esp32-spi-capacitive-touch-screen-tutorial
- *
- *  LovyangGFX (LGFX) Configuration
- *******************************************************************************/
+// LovyanGFX custom config for:
+//   Board:   Seeed XIAO ESP32-C3
+//   Display: Hosyond 2.8" IPS 240x320, ILI9341V driver, 4-line SPI
+//   Touch:   FT6336G capacitive, I2C
+//
+// Pin mapping used (XIAO D-label -> real ESP32-C3 GPIO):
+//   LCD_RS(DC) D4 -> GPIO6    LCD_RST D5 -> GPIO7    LCD_CS  D6 -> GPIO21
+//   LED(BL)    D7 -> GPIO20   SCK     D8 -> GPIO8    MISO    D9 -> GPIO9
+//   MOSI       D10 -> GPIO10
+//   CTP_SCL    D0 -> GPIO2    CTP_SDA D1 -> GPIO3    CTP_RST D2 -> GPIO4
+//   CTP_INT    D3 -> GPIO5
 
 #pragma once
+#define LGFX_USE_V1
 #include <LovyanGFX.hpp>
 
-// I2C Touch Pins
-static constexpr int TOUCH_INT  = 34;  // CTP_INT
-static constexpr int I2C_SDA    = 32;  // CTP_SDA
-static constexpr int TOUCH_RST  = 13;  // CTP_RST
-static constexpr int I2C_SCL    = 33;  // CTP_SCL
-
-// Screen SPI pins
-static constexpr int PIN_MISO   = 19;  // SDO(MISO)
-static constexpr int PIN_BL     = 14;  // LED
-static constexpr int PIN_SCLK   = 18;  // SCK
-static constexpr int PIN_MOSI   = 23;  // SDI(MOSI)
-static constexpr int PIN_DC     = 21;  // LCD_RS
-static constexpr int PIN_RST    = 4;   // LCD_RST
-static constexpr int PIN_LCD_CS = 27;  // LCD_CS (SS)
-
-// Change the screen dimensions to match your screen.
-// Set this to the native resolution and use "offset_rotation"
-// configurations to change the screen orientation
-// rather than swapping these values to handle portrait
-// versus landscape.
-
-// Dimensions for the 2.8" screen
-static constexpr uint16_t SCREEN_WIDTH = 240;
-static constexpr uint16_t SCREEN_HEIGHT = 320;
-
-// Change this for your specific touchscreen controller
-// 0x38 is a very common value, used by FocalTech FT5x06
-// family (FT5206/FT5306/FT5406/FT6236/FT6336, etc.)
-static constexpr int TOUCH_I2C_ADDRESS = 0x38;
-
-struct LGFX : public lgfx::LGFX_Device {
-
-  // Panel instance for the 2.8" screen in this tutorial
+class LGFX : public lgfx::LGFX_Device
+{
   lgfx::Panel_ILI9341 _panel_instance;
+  lgfx::Bus_SPI        _bus_instance;
+  lgfx::Light_PWM      _light_instance;
+  lgfx::Touch_FT5x06   _touch_instance;   // covers FT6206/FT6236/FT6336/FT6436
 
-  // Panel instnace for the 3.5" screen in this tutorial
-  //lgfx::Panel_ST7796 _panel_instance;
-
-  // Change to the correct touch instance for your touch controller
-  // This works for both screens used in this tutorial
-  lgfx::Touch_FT5x06 _touch_instance;
-
-  lgfx::Bus_SPI _bus_instance;
-  lgfx::Light_PWM _light_instance;
-
-  LGFX(void) {
-    // Panel configuration
-    {
-      auto cfg = _panel_instance.config();
-
-      cfg.pin_cs           = PIN_LCD_CS;
-      cfg.pin_rst          = PIN_RST;
-      cfg.pin_busy         = -1;
-      cfg.memory_width     = SCREEN_WIDTH;
-      cfg.memory_height    = SCREEN_HEIGHT;
-      cfg.panel_width      = SCREEN_WIDTH;
-      cfg.panel_height     = SCREEN_HEIGHT;
-      cfg.offset_x         = 0;
-      cfg.offset_y         = 0;
-      cfg.offset_rotation  = 3;    // 2.8" screen used in this tutorial
-      //cfg.offset_rotation  = 1;  // 3.5" screen used in this tutorial
-                                   // Rotation for landscape with header pins
-                                   // on the right side of the screen
-
-      cfg.invert           = true; // Fixes the incorrect color issue
-      cfg.dummy_read_pixel = 8;
-      cfg.dummy_read_bits  = 1;
-      cfg.readable         = true;
-      cfg.rgb_order        = false;
-      cfg.bus_shared       = true;
-      cfg.dlen_16bit       = false;
-
-      _panel_instance.config(cfg);
-    }
-
-    // SPI bus configuration
-    {
+public:
+  LGFX(void)
+  {
+    { // ---- SPI bus (shared by the display) ----
       auto cfg = _bus_instance.config();
-      cfg.pin_sclk    = PIN_SCLK;
-      cfg.pin_mosi    = PIN_MOSI;
-      cfg.pin_miso    = PIN_MISO;
-      cfg.pin_dc      = PIN_DC;
-      cfg.spi_host    = VSPI_HOST;
-      cfg.freq_write  = 40000000;
-      cfg.freq_read   = 10000000;
-      cfg.dma_channel = 1;
+
+      cfg.spi_host   = SPI2_HOST;    // ESP32-C3: use SPI2_HOST or SPI3_HOST (not VSPI/HSPI)
+      cfg.spi_mode   = 0;
+      cfg.freq_write = 40000000;
+      cfg.freq_read  = 16000000;
+      cfg.spi_3wire  = false;        // this module has a real MISO line, so 4-wire SPI
+      cfg.use_lock   = true;
+      cfg.dma_channel = SPI_DMA_CH_AUTO;
+      cfg.pin_sclk = 8;              // D8 (SCK)
+      cfg.pin_mosi = 10;             // D10 (SDI/MOSI)
+      cfg.pin_miso = 9;              // D9 (SDO/MISO)
+      cfg.pin_dc   = 6;              // D4 (LCD_RS)
 
       _bus_instance.config(cfg);
       _panel_instance.setBus(&_bus_instance);
     }
 
-    // Backlight configuration
-    {
+    { // ---- Panel ----
+      auto cfg = _panel_instance.config();
+
+      cfg.pin_cs  = 21;              // D6 (LCD_CS)
+      cfg.pin_rst = 7;               // D5 (LCD_RST)
+      cfg.pin_busy = -1;
+
+      cfg.panel_width      = 240;
+      cfg.panel_height     = 320;
+      cfg.offset_x         = 0;
+      cfg.offset_y         = 0;
+      cfg.offset_rotation  = 3;
+      cfg.dummy_read_pixel = 8;
+      cfg.dummy_read_bits  = 1;
+      cfg.readable         = true;
+      cfg.invert           = true;    // required for IPS panels (this one is IPS)
+      cfg.rgb_order        = false;   // set true if red/blue look swapped
+      cfg.dlen_16bit        = false;
+      cfg.bus_shared         = true;
+
+      _panel_instance.config(cfg);
+    }
+
+    { // ---- Backlight ----
       auto cfg = _light_instance.config();
 
-      cfg.pin_bl      = PIN_BL; // LED backlight pin
+      cfg.pin_bl      = 20;           // D7 (LED)
       cfg.invert      = false;
-      cfg.freq        = 1000;   // PWM frequency (1kHz is standard for LED backlight)
-      cfg.pwm_channel = 0;      // Use channel 0 instead of 7 to avoid conflicts
+      cfg.freq        = 44100;
+      cfg.pwm_channel = 0;            // C3 only has LEDC channels 0-5, not 7
 
       _light_instance.config(cfg);
       _panel_instance.setLight(&_light_instance);
     }
 
-    // Touch config
-    {
+    { // ---- Touch (FT6336G, I2C, addr 0x38) ----
       auto cfg = _touch_instance.config();
 
-      cfg.x_min           = 0;
-      cfg.x_max           = SCREEN_WIDTH - 1;
-      cfg.y_min           = 0;
-      cfg.y_max           = SCREEN_HEIGHT - 1;
-      cfg.offset_rotation = 2;    // 2.8" screen used in this tutorial
-      //cfg.offset_rotation = 0;  // 3.5" screen used in this tutorial
-                                  // Rotation for landscape with header pins
-                                  // on the right side of the screen
-      cfg.pin_int         = TOUCH_INT;
-      cfg.pin_rst         = TOUCH_RST;
-      cfg.pin_sda         = I2C_SDA;
-      cfg.pin_scl         = I2C_SCL;
-      cfg.i2c_port        = 0;
-      cfg.i2c_addr        = TOUCH_I2C_ADDRESS;
-      cfg.freq            = 400000;
+      cfg.x_min = 0;
+      cfg.x_max = 239;
+      cfg.y_min = 0;
+      cfg.y_max = 319;
+      cfg.pin_int    = 5;             // D3 (CTP_INT)
+      cfg.pin_rst    = 4;             // D2 (CTP_RST)
+      cfg.bus_shared = false;         // touch is on its own I2C bus, not the display's SPI bus
+      cfg.offset_rotation = 0;
+
+      cfg.i2c_port = 1;               // either free I2C port (0 or 1) works
+      cfg.i2c_addr = 0x38;            // FT6336G default address
+      cfg.pin_sda  = 3;               // D1 (CTP_SDA)
+      cfg.pin_scl  = 2;               // D0 (CTP_SCL)
+      cfg.freq     = 400000;
 
       _touch_instance.config(cfg);
       _panel_instance.setTouch(&_touch_instance);
     }
 
     setPanel(&_panel_instance);
-
   }
-
 };
+```
+
+Run to print Hello World
 
 ```
+#include <LovyanGFX.h>
+#include "lgfx_config.h"
+
+LGFX tft;
+
+void setup() {
+  Serial.begin(115200);
+  delay(50);
+
+  tft.init();
+  tft.setBrightness(255);
+  tft.fillScreen(TFT_BLACK);
+
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextSize(2);
+  tft.setCursor(20, 20);
+
+  tft.println("Hello, world!");
+  tft.println("LovyanGFX on ESP32");
+}
+
+void loop() {
+  static uint32_t last = 0;
+  static int x = 20;
+
+  if (millis() - last > 250) {
+    last = millis();
+    tft.fillRect(20, 80, 240, 24, TFT_BLACK);
+    tft.setCursor(20, 80);
+    tft.print("Tick ");
+    tft.print(millis() / 1000);
+    tft.print("s");
+  }
+}
+```
+
+#### It's compiling and uploading fine but not actually printing anything. I checked my wiring. Oh it's because my pinout is mapped to the S3 not the C3, no need to rewire, just update the code.. didn't know D-numbers and GPIO numbers were two separate naming systems
+
+#### Change offset_rotation in the config file, 0 for portrait and 3 for landscape.
+
+#### For more complex UI, use the [advanced library](https://github.com/lvgl/lvgl)
+
+![Press me demo](/images/PressMeDemo.JPG)
+
+#### I was like why isn't it registering my taps then realized I still had the plastic sticker on top 🙂‍↕️
+
+#### Can also import images via microSD card on back of touchscreen.
