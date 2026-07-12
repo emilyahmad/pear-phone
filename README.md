@@ -6,4 +6,4 @@
 
 ![Printing on touchscreen](/images/PressMeDemo.JPG)
 
-#### Currently learning to use the touchscreen..
+#### Currently learning to use touchscreen/Lovyan GFX
