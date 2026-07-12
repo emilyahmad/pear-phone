@@ -12,7 +12,7 @@ Not sure what type of connector: pin, generic, mounting pin, or generic shield. 
 This is cool because before I didn't know the D-numbers and GPIO numbers were two separate naming systems but I can see it clearly in the schematic:
 ![XIAO Schematic](/images/XIAO_Sch.png)
 
-Also if I want to add buttons/switches I'm going to need more pins, so the C3 may have not been the right MCU after all. I'm going to try routing the LED (backlight) to 5V and open up the D7 pin/8, then connect the switch to it.
+Also if I want to add buttons/switches I'm going to need more pins, so the C3 may have not been the right MCU after all. I'm going to try routing the LED (backlight) to 5V and open up the D7 pin/8, then connect the switch to it. I've attached a power flag to the VUSB and GND pins of the C3 in the schematic (getting power externally) this resolves any "input power pin not driven by any output power pin" errors. This works for power and GND because when you plug into a USB port, you're getting both the supply and the return path from that one connection.
 
 Because I'm adding a switch/push, I'll include in firmware
 
@@ -22,3 +22,7 @@ pinMode(pin, INPUT_PULLUP)
 
 Cool, here's the schematic
 ![Schematic](/images/C3_Simple_Schematic.png)
+
+Made the edgecut and pear phone logo /images/Silkscreens
+
+I'll assign footprints next
