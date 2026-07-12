@@ -2891,7 +2891,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "XIAO_ESP32C3:MODULE_XIAO_ESP32C3"
+		(property "Footprint" "footprints:MODULE_XIAO_ESP32C3"
 			(at 44.45 34.29 0)
 			(hide yes)
 			(show_name no)
@@ -3152,7 +3152,7 @@
 				)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Button_Switch_THT:SW_PUSH_6mm"
 			(at 83.82 19.05 0)
 			(hide yes)
 			(show_name no)
@@ -3384,7 +3384,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "Connector_PinSocket_2.54mm:PinSocket_1x14_P2.54mm_Vertical"
 			(at 102.87 54.61 0)
 			(hide yes)
 			(show_name no)
