@@ -206,7 +206,7 @@ void loop() {
 }
 ```
 
-#### It's compiling and uploading fine but not actually printing anything. I checked my wiring. Oh it's because my pinout is mapped to the S3 not the C3, no need to rewire, just update the code.. didn't know D-numbers and GPIO numbers were two separate naming systems
+#### It's compiling and uploading fine but not actually printing anything. I checked my wiring. Oh it's because my pinout is mapped to the S3 not the C3, no need to rewire, just update the code.. didn't know D-numbers and GPIO numbers were two separate naming systems.
 
 #### Change offset_rotation in the config file, 0 for portrait and 3 for landscape.
 
