@@ -90,7 +90,7 @@ public:
       cfg.bus_shared = false;         // touch is on its own I2C bus, not the display's SPI bus
       cfg.offset_rotation = 2;
 
-      cfg.i2c_port = 1;               // either free I2C port (0 or 1) works
+      cfg.i2c_port = 0;               // ESP32-C3 only has one I2C controller (port 0)
       cfg.i2c_addr = 0x38;            // FT6336G default address
       cfg.pin_sda  = 3;               // D1 (CTP_SDA)
       cfg.pin_scl  = 2;               // D0 (CTP_SCL)
