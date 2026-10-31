@@ -1,4 +1,4 @@
-# June 19: Get components
+# June 19: Get components (1hr 28m)
 
 Kind of want to start with a prototype
 components:
@@ -22,39 +22,39 @@ what I'll buy now:
 I'll order these two parts, connect them physically, figure out the wifi and connect to websites
 Then start building the slap website
 
-## claude's advice
+claude's advice
 
-## Breadboard wiring:
+Breadboard wiring:
 
-## XIAO ESP32-S3 Sense → breadboard, power via USB-C
-## Hosyond display → jumper wires from its 14-pin header to XIAO's SPI pins (CS, DC, RESET, MOSI, SCK, MISO) + touch I2C pins
-## Camera is already attached to the XIAO Sense via its ribbon — no extra wiring needed for that part!
+- XIAO ESP32-S3 Sense → breadboard, power via USB-C
+- Hosyond display → jumper wires from its 14-pin header to XIAO's SPI pins (CS, DC, RESET, MOSI, SCK, MISO) + touch I2C pins
+- Camera is already attached to the XIAO Sense via its ribbon — no extra wiring needed for that part!
 
-## Then for software:
+Then for software:
 
-## Get the display showing something basic (Arduino IDE + TFT_eSPI library)
-## Get the camera capturing photos (ESP32 camera library, built into Sense board support)
-## Add WiFi — connect to your network
-## Build your custom web app/API that the XIAO talks to
-## Display fetched data on the touchscreen, send photos to your server
+- Get the display showing something basic (Arduino IDE + TFT_eSPI library)
+- Get the camera capturing photos (ESP32 camera library, built into Sense board support)
+- Add WiFi — connect to your network
+- Build your custom web app/API that the XIAO talks to
+- Display fetched data on the touchscreen, send photos to your server
 
 
-# July 12: Schematic for pear-shaped PCB
-## XIAO ESP32 board arrived, wanted to try programming and wiring it up to the touch screen/prototyping.
+# July 12: Schematic for pear-shaped PCB (6hr 20m)
+XIAO ESP32 board arrived, wanted to try programming and wiring it up to the touch screen/prototyping.
 
 ---
 
-## Wiring up
+Wiring up
 
-## Mount across the center trench so pins don't short and leave wi-fi antenna extending over edge for stable connection
+Mount across the center trench so pins don't short and leave wi-fi antenna extending over edge for stable connection
 
 ![Example wiring](/images/WiringExample.png)
 
-## Using ESP32 dev kit as an example
+Using ESP32 dev kit as an example
 
 ![XIAO S3 GPIO pin layout](/images/XIAOS3GPIOS.png)
 
-## Remapping SCK, MOSI (SDI), and MISO (SDO) to specific GPIO's on S3, other display pins will route to any free GPIOs
+Remapping SCK, MOSI (SDI), and MISO (SDO) to specific GPIO's on S3, other display pins will route to any free GPIOs
 
 | display pin | fx                                               | XIAO S3 pin | Notes                                                                                                   |
 | ----------- | ------------------------------------------------ | ----------- | ------------------------------------------------------------------------------------------------------- |
@@ -62,7 +62,7 @@ Then start building the slap website
 | SDI (MOSI)  | data input                                       | D10         | serial digital interface, protocol for transmitting uncompressed & unencrypted digital video over cable |
 | SDO (MISO)  | data from peripheral                             | D9          | serial data out                                                                                         |
 
-## Remaining pins (free GPIOs)
+Remaining pins (free GPIOs)
 
 | display | c3  | fx  |
 | ------- | --- | --- |
@@ -71,7 +71,7 @@ Then start building the slap website
 | LCD_RS  | D4  | ?   |
 | LED     | D7  | ?   |
 
-## This doesn't include the touch screen pins because I need more male to female wires, I'll do that after I buy more. Got more and wired up:
+This doesn't include the touch screen pins because I need more male to female wires, I'll do that after I buy more. Got more and wired up:
 
 ![Example touch wiring](/images/TouchWiringExample.png)
 
@@ -82,7 +82,7 @@ Then start building the slap website
 | CTP_SDA | 32    | ?   | GPIO          |
 | CTP_INT | 34    | ?   | input only    |
 
-## Oh apparently I can just wire the touch screen pins to any GPIOs.
+Oh apparently I can just wire the touch screen pins to any GPIOs.
 
 | touch   | c3  | Notes         |
 | ------- | --- | ------------- |
@@ -91,15 +91,15 @@ Then start building the slap website
 | CTP_SDA | 1   | GPIO          |
 | CTP_INT | 3   | Input only    |
 
-## I guess SD_CS stays unconnected
+I guess SD_CS stays unconnected
 
-## Programming
+Programming
 
-## Install ESP32 boots package Version 2
+Install ESP32 boots package Version 2
 
-## Arduino IDE/Settings/Additional boards manager URL and insert [this link](https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json) then tools/board manager, search ESP32 and download version 2.0.4 by espressif. Once downloaded, select tools/board/esp32/XIAO_ESP32C3 (scroll down a lot)
+Arduino IDE/Settings/Additional boards manager URL and insert [this link](https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json) then tools/board manager, search ESP32 and download version 2.0.4 by espressif. Once downloaded, select tools/board/esp32/XIAO_ESP32C3 (scroll down a lot)
 
-## Install LovyanGFX 1.2.19, new tab and create an lgfx_config.h file
+Install LovyanGFX 1.2.19, new tab and create an lgfx_config.h file
 
 ```
 // LovyanGFX custom config for:
@@ -248,17 +248,17 @@ void loop() {
 }
 ```
 
-## It's compiling and uploading fine but not actually printing anything. I checked my wiring. Oh it's because my pinout is mapped to the S3 not the C3, no need to rewire, just update the code.. didn't know D-numbers and GPIO numbers were two separate naming systems.
+It's compiling and uploading fine but not actually printing anything. I checked my wiring. Oh it's because my pinout is mapped to the S3 not the C3, no need to rewire, just update the code.. didn't know D-numbers and GPIO numbers were two separate naming systems.
 
-## Change offset_rotation in the config file, 0 for portrait and 3 for landscape.
+Change offset_rotation in the config file, 0 for portrait and 3 for landscape.
 
-## For more complex UI, use the [advanced library](https://github.com/lvgl/lvgl)
+For more complex UI, use the [advanced library](https://github.com/lvgl/lvgl)
 
 ![Press me demo](/images/PressMeDemo.JPG)
 
-## I was like why isn't it registering my taps then realized I still had the plastic sticker on top 🙂‍↕️
+I was like why isn't it registering my taps then realized I still had the plastic sticker on top 🙂‍↕️
 
-## Can also import images via microSD card on back of touchscreen.
+Can also import images via microSD card on back of touchscreen.
 
 Going to start making the PCB (copper traces instead of jumper wires now)
 
@@ -303,7 +303,7 @@ I need to make sure my edge cuts/PCB's pear shape fits the display nicely. I'll 
 | ----------------------------- | ----------------------------- | ----------------------------- |
 | ![PCB now](/images/PCBv1.png) | ![PCB now](/images/3Dv1F.png) | ![PCB now](/images/3Dv1B.png) |
 
-# July 13: Wired PCB
+# July 13: Wired PCB (1hr 35m)
 
 I'm going to try setting up the wifi server from the C3. I've plugged it in and am trying the WifiServer example sketch and have this [tutorial](https://www.youtube.com/watch?v=aH3sLEQI4_w&t=21s) open. I don't really care about turning on/off the LED, I just want to see if it connects to the web server, I might connect it by toggling on/off the backlight LED of the touchscreen.
 
@@ -389,8 +389,8 @@ void loop() {
 
 If I want to make an actual website (maybe use [this tumblr website](https://theslapdotgov.tumblr.com/) as a reference) I'll create the website files within the C3 project instead of putting it in another project and directing to its domain. Instead of using a specific IP address I could also look into using mDNS for friendlier links.
 
-# October 18: Playing with GFX
-# June 19: 
+# October 18: Playing with GFX (1hr 10m)
+# June 19: (2hr 50m)
 
 Time to wire the PCB, I think I'll buy it off of PCBWay because they can do a minimum of 1 PCB, I don't want 5 from JLCPCB. I'm just not sure how they want the fabrication files.
 
@@ -408,3 +408,25 @@ This is the current BOM, the PCB is $7.60 and $11.72 with Global Standard Shippi
 | 3   | U2         | MODULE_XIAO_ESP32C3             | 1        | XIAO_ESP32C3 |                  |
 
 I remember having to edit some of the column names for the devboard, hopefully I didn't have to do that for this/KiCad's BOM will work directly, especially if I'm not asking them to assemble anything.
+
+# October 20: Choosing new screen component (5m)
+Want to go with a different screen, the current touchscreen can only render screenshots and I'm not able to get the touchscreen to register my taps. Instead I'll go with a Sunton 4.3" / 7" ESP32-S3, for gyroscope and add an MPU6050 or BMI270 breakout over I2C.
+
+# October 31: Fixing case design
+
+<img src="/images/hand-drawings/new-case.png" width="68" height="62" alt="issue with case">
+
+It's really hard to find screens that aren't a rectangular shape (other than those cicrcular ones everyone on youtube is turning into a hair pin), or I should specify, screens that are unconventional or custom shapes (like pears), nevermind touchscreens. So I kept trying to think of ways to cover up the rectangular shape of the screen with the case I'll design for the phone, and I came up with this new design, where I'll just have more parts of the case extruding on top of the screen, like more buttons.
+
+<img src="/images/hand-drawings/new-case.png" width="68" height="62" alt="new case">
+
+For the UI, I like the "home screen" appearance for the general phone, with all the apps in the background, although I don't think I will make these functional, I they'll give the project the appearance of a phone.
+
+<img src="/images/hand-drawings/planning-UI.png" width="68" height="62" alt="plannin g the UI">
+
+I do want to make the posting to the slap.com feature come to life, although it will definitely just be a local. Plan is, I'll make the slap.com the only functional app on the phone. Users can tap on it, then are taken to a screen with their own profile, and collapsable sections with their past notes. Depending on the capabilities of LGFX, I'll decide what these notes look like, either:
++ Writing real posts (a keyboard shows up and users can easily type)
++ Users draw within a small white board space
++ Users select an emoji
+
+Then, they can return to the home screen by clicking the home screen/pear button, or turn it off by clicking the off button.
