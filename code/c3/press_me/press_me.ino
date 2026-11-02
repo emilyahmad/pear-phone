@@ -7,7 +7,7 @@
  *******************************************************************************/
  
 #include <LovyanGFX.h>
-#include "lgfx_config.h" // Configuration for our screen
+#include "../lgfx_config.h" // Configuration for our screen
 
 // Create an instance of LovyanGFX (LGFX)
 LGFX tft;

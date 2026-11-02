@@ -1,12 +1,5 @@
-# Pear phone 🍐
+# Pear phone
 
-circuit simulators to try
-[arduino](https://wokwi.com/projects/new/blank) , tinkercad
-
-### 2.8" tft touchscreen
-
-### ESP32-S3 (switch with a Sense (with OV2640 camera) later to capture images)
-
-![Printing on touchscreen](/images/PressMeDemo.JPG)
-
-#### Currently learning to use touchscreen/Lovyan GFX
+Recreating the pear phones from Victorious
+Touch screen with a pear shaped case, a home screen and off button.
+Some apps, plus posting to the slap.com
