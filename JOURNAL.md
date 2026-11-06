@@ -279,7 +279,7 @@ Sweet touch screen lights up right, I also downloaded Adafruit_ILI9341 from libr
 
 Outline what will actually be displayed (the pear shaping case will cover the corners)
 
-# November 2: Wiring touch screen
+# November 2: Wiring touch screen (3 hours)
 
 I'll wire up the touch sensors.
 
@@ -308,11 +308,11 @@ I'll work on developing a more advanced UI, starting with the Slap.com screen. T
 <table align="center">
   <tr>
     <td align="center" valign="top" width="50%">
-      <img src="/images/demo/editing-message.gif" width="100%" alt="editing messagae"><br>
+      <img src="/images/demos/editing-message.gif" width="100%" alt="editing messagae"><br>
       <sub>Editing message</sub>
     </td>
     <td align="center" valign="top" width="50%">
-      <img src="/images/demo/uploading-message.gif" width="100%" alt="posting"><br>
+      <img src="/images/demos/uploading-message.gif" width="100%" alt="posting"><br>
       <sub>Posting</sub>
     </td>
   </tr>
@@ -324,11 +324,11 @@ Users can update their current message and select an animated emoji. Some change
 <table align="center">
   <tr>
     <td align="center" valign="top" width="50%">
-      <img src="/images/UI/electrons.png" width="100%" alt="weird electron shape"><br>
+      <img src="/images/UI/electrons.png" width="50%" alt="weird electron shape"><br>
       <sub>Weird electron shape instead of hands</sub>
     </td>
     <td align="center" valign="top" width="50%">
-      <img src="/images/UI/good-hand.png" width="100%" alt="rock n roll emoji"><br>
+      <img src="/images/UI/good-hand.png" width="50%" alt="rock n roll emoji"><br>
       <sub>Preferable hand example</sub>
     </td>
   </tr>
@@ -337,7 +337,30 @@ Users can update their current message and select an animated emoji. Some change
 + Make the "Super pumped" and "Fighting to stay awake" emojis better by replacing the electron looking circles with something that looks more like hand - the Rock n Roll one is a pretty nice example
 + Make the message text bigger
 
+Idea for later:
+
 Power switch + rechargable module + lipo battery would be nice. Oh this XIAO is rechargable. I'll just get a 
 + 3.7 V single-cell LiPo, with a built-in protection circuit (PCM), 500–1000 mAh
 + small SPDT slide switch (e.g. SS12D00 through-hole)
 + 2 × 100 kΩ resistors, divides voltage so we can read battery life
+
+# November 3: Adding username, choosing avatar (phone booting) (2 hours)
+
+In portrait mode (how the home screen is oriented), when users turn on the pear phone for the first time, I want them to see a "hello" screen drawn out (like the iPhone does)
+
+<br>
+
+<p align="center">
+  <img src="https://support.apple.com/library/content/dam/edam/applecare/images/en_US/iOS/ios-16-iphone-13-pro-setup-hello-steps.png" width="15%" alt="touchscreen test"><br>
+</p>
+
+Then, it'll prompt them to enter a name and design their avatar, these will show up again in the Slap.com app. I think I'll slightly grey out the other apps to give the appearance that they aren't functional - like the friends tab in the slap.com screen, and then if I work on this in the future I'll return them to their original color (I can just grab from a previous commit).
+
+I'll also create a settings screen with a sign out button so new "users" can use the phone with their information.
+
+# November 4: Finishing UI touches
+
+I'll add some more touches,
+including touching up some of the emojis and their animations, especially the ones with the little hands.
+When users first plug in their device, they get a black screen with a lightning bolt drawn in the center indicating power was received.
+I've also adjusted the sizes of the home and friends tabs so the icons & text are the same as the new/clear, the width still matches the message box but the height is also the same as the other's

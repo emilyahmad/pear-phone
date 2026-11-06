@@ -111,7 +111,7 @@ void iconCamera(int cx, int cy, int r) {
 void iconMessages(int cx, int cy, int r) {
   gradCircle(cx, cy, r, 0x5CF27A, 0x14C036);
   fillEllipse(cx + 1, cy - 1, 10, 7, WHITE);
-  tft.fillTriangle(cx - 7, cy + 3, cx - 12, cy + 9, cx - 2, cy + 5, WHITE); // tail
+  tft.fillTriangle(cx - 7, cy + 3, cx - 10, cy + 7, cx - 2, cy + 5, WHITE); // tail (short, stays clear of the circle edge)
 }
 
 // 3.png: blue, white "Sf"
@@ -135,12 +135,56 @@ void iconStocks(int cx, int cy, int r) {
   }
 }
 
-// 5.png: red gradient, white map pin
+// 5.png / design-references/apple-maps-app.png: map tiles (green park, pink and
+// yellow blocks, grey curved road, white streets), blue road up to a blue
+// location dot with a white navigation arrow
+const int MAPS_DOT_DX = -2, MAPS_DOT_DY = 2;   // location dot offset from center
+
+// Map color at (u, v), both in -1..1 across the icon
+uint32_t mapsColor(float u, float v) {
+  float uc = (float)MAPS_DOT_DX / ICON_R, vc = (float)MAPS_DOT_DY / ICON_R;
+  float diag = v - (0.15f + 0.45f * u);              // white street, top-left to bottom-right
+  if (fabsf(diag) < 0.09f) return 0xFFFFFF;
+  if (diag < 0) {                                    // above the street
+    if (v < vc) {                                    // blue road up from the dot
+      float bu = fabsf(u - uc);
+      if (bu < 0.13f) return 0x2F7CF6;
+      if (bu < 0.21f) return 0xFFFFFF;
+    }
+    if (u < uc) return 0xEDEDED;                     // light block, top left
+    float d = sqrtf((u - 1) * (u - 1) + (v + 1) * (v + 1));
+    if (d > 0.55f && d < 0.72f) return 0xA9A9A9;     // grey curved road
+    if (d > 0.48f && d < 0.79f) return 0xFFFFFF;
+    return 0x6CD66E;                                 // green park
+  }
+  if (u < -0.62f) return 0xF47FCB;                   // pink block, left
+  if (u < -0.48f) return 0xFFFFFF;
+  float y = (u - 0.3f) + 0.35f * (v - 0.8f);         // yellow road, bottom
+  if (fabsf(y) < 0.16f) return 0xFFC830;
+  if (fabsf(y) < 0.23f) return 0xFFFFFF;
+  return 0xF3EFE6;                                   // beige block
+}
+
 void iconMaps(int cx, int cy, int r) {
-  gradCircle(cx, cy, r, 0xD81414, 0x6E0606);
-  tft.fillCircle(cx, cy - 3, 7, WHITE);
-  tft.fillTriangle(cx - 6, cy + 1, cx + 6, cy + 1, cx, cy + 11, WHITE);
-  tft.fillCircle(cx, cy - 3, 3, rgb(0xA80A0A));
+  // Paint the map pixel by pixel, sending runs of one color as a single line
+  for (int dy = -r; dy <= r; dy++) {
+    int w = halfWidth(r, dy);
+    int start = -w;
+    uint32_t c = mapsColor((float)start / r, (float)dy / r);
+    for (int dx = -w + 1; dx <= w + 1; dx++) {
+      uint32_t n = dx <= w ? mapsColor((float)dx / r, (float)dy / r) : ~c;
+      if (n != c) {
+        tft.drawFastHLine(cx + start, cy + dy, dx - start, rgb(c));
+        start = dx;
+        c = n;
+      }
+    }
+  }
+  int x = cx + MAPS_DOT_DX, y = cy + MAPS_DOT_DY;
+  tft.fillCircle(x, y, 7, WHITE);                           // dot outline
+  tft.fillCircle(x, y, 6, rgb(0x1E7CF2));                   // blue dot
+  tft.fillTriangle(x, y - 4, x - 3, y + 3, x + 3, y + 3, WHITE);   // arrow
+  tft.fillTriangle(x - 3, y + 4, x + 3, y + 4, x, y + 1, rgb(0x1E7CF2)); // arrow notch
 }
 
 // 6.png: white, rainbow flower
@@ -165,17 +209,20 @@ void iconWeather(int cx, int cy, int r) {
   tft.fillRoundRect(cx - 7, cy + 3, 19, 6, 3, WHITE);
 }
 
-// 8.png: yellow top half, white lined paper bottom half
+// 8.png / design-references/apple-notes-app.png: yellow top, row of grey
+// dots, light grey paper with two grey ruled lines
 void iconNotes(int cx, int cy, int r) {
-  tft.fillCircle(cx, cy, r, WHITE);
-  for (int dy = -r; dy <= -1; dy++) circleRow(cx, cy, r, dy, rgb(0xFFCC1A));
-  int w = halfWidth(r, 1);
-  for (int x = -w; x <= w; x += 2) tft.drawPixel(cx + x, cy + 1, BLACK);  // dotted line
-  const int lines[3] = {6, 10, 14};
-  for (int i = 0; i < 3; i++) {
-    w = halfWidth(r, lines[i]);
-    tft.drawFastHLine(cx - w, cy + lines[i], 2 * w + 1, BLACK);
+  for (int dy = -r; dy <= r; dy++) {
+    float t = (dy + r) / (2.0f * r);
+    uint16_t c;
+    if (dy <= -8)      c = mix(0xFFD52E, 0xFFE15A, (dy + r) / 8.0f);   // yellow band
+    else if (dy == -7) c = rgb(0xFFF3C4);                               // soft edge
+    else               c = mix(0xFBFBFB, 0xE6E6E6, t);                 // paper
+    circleRow(cx, cy, r, dy, c);
   }
+  int w = halfWidth(r, -5);
+  for (int x = -w + 2; x <= w - 2; x += 3) tft.drawPixel(cx + x, cy - 5, rgb(0x9C9C9C)); // dots
+  for (int ly : {1, 8}) tft.fillRoundRect(cx - 10, cy + ly, 21, 2, 1, rgb(0xB4B4B4));   // ruled lines
 }
 
 // 9.png: pink -> purple gradient, white ring with a music note

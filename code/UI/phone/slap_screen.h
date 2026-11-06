@@ -36,12 +36,44 @@ constexpr int SCREEN_H = 240;
 #define COL_GRAY     C565(170, 170, 180)
 #define COL_GOLD     C565(255, 215, 100)
 #define COL_LAVENDER C565(215, 205, 255)
+#define COL_HINT     C565(120, 140, 165)   // placeholder text ("What's on your mind?", ...)
 
 
 enum PanelShape { WEDGE, ROUND_START, ROUND_END };
 
 #define MAX_POST 140   // longest post, in characters
-char statusText[MAX_POST + 1] = "Speed being miles morales isn't a speed move";   // the posted message
+char statusText[MAX_POST + 1] = "";   // the posted message (empty: the card shows a hint instead)
+
+// Every post, for the Past screen: the newest MAX_PAST, oldest first. Saved in
+// flash by savePast() in phone.ino (key "past1"), so changing PastPost means a
+// new key. Post numbers keep counting up after old posts are dropped.
+constexpr int MAX_PAST = 20;
+struct PastPost {
+  uint16_t num;                   // 1 = the first post
+  int8_t   feeling;               // NO_FEELING (-1) or an index into FEELINGS
+  char     text[MAX_POST + 1];
+};
+PastPost past[MAX_PAST];
+int numPast = 0;
+
+// Adds a post as the newest one, dropping the oldest when the list is full
+void addPast(const char* text, int feel) {
+  uint16_t num = numPast ? past[numPast - 1].num + 1 : 1;
+  if (numPast == MAX_PAST) {
+    memmove(&past[0], &past[1], (MAX_PAST - 1) * sizeof(PastPost));
+    numPast--;
+  }
+  PastPost& p = past[numPast++];
+  p.num = num;
+  p.feeling = feel;
+  strlcpy(p.text, text, sizeof(p.text));
+}
+
+// The user's name, set on the first-boot setup screens (setup_screen.h).
+// 12 characters + ":" at bold size 2 still fits the 196 px profile card.
+constexpr int MAX_NAME = 12;
+const char* const DEFAULT_NAME = "LOPI DOPI";
+char userName[MAX_NAME + 1] = "LOPI DOPI";
 
 // ---- Rounded-rectangle clipping ---------------------------------------------
 
@@ -77,23 +109,30 @@ uint16_t bgColor(int y) {
   return tft.color565(20 + (int)(40 * f), 8 + (int)(14 * f), 50 + (int)(50 * f));
 }
 
-void drawBackground() {
-  for (int y = LINE_THICKNESS; y <= SCREEN_H - 1 - LINE_THICKNESS; y++) {
+// Gradient + stars. Pass a rectangle (x0, y0)-(x1, y1) to redraw just that part:
+// the stars come from a fixed seed, so a partial redraw matches the full one.
+void drawBackground(int x0 = 0, int y0 = 0, int x1 = SCREEN_W - 1, int y1 = SCREEN_H - 1) {
+  for (int y = max(y0, LINE_THICKNESS); y <= min(y1, SCREEN_H - 1 - LINE_THICKNESS); y++) {
     int xl, xr;
     rowExtent(y, xl, xr);
-    tft.drawFastHLine(xl, y, xr - xl + 1, bgColor(y));
+    xl = max(xl, x0);
+    xr = min(xr, x1);
+    if (xr >= xl) tft.drawFastHLine(xl, y, xr - xl + 1, bgColor(y));
   }
 
 #if STARS
+  auto star = [&](int x, int y, uint16_t c) {
+    if (x >= x0 && x <= x1 && y >= y0 && y <= y1) tft.drawPixel(x, y, c);
+  };
   randomSeed(11);   // fixed seed: same stars every run
   for (int i = 0; i < 70; i++) {
     int x = random(8, 312), y = random(6, 234);
     if (!insideBorder(x, y, 4)) continue;
     uint16_t c = (i % 5 == 0) ? COL_GOLD : COL_LAVENDER;
-    tft.drawPixel(x, y, c);
+    star(x, y, c);
     if (i % 7 == 0) {
-      tft.drawPixel(x - 1, y, c); tft.drawPixel(x + 1, y, c);
-      tft.drawPixel(x, y - 1, c); tft.drawPixel(x, y + 1, c);
+      star(x - 1, y, c); star(x + 1, y, c);
+      star(x, y - 1, c); star(x, y + 1, c);
     }
   }
 #endif
@@ -115,6 +154,16 @@ void boldText(const char* s, int x, int y, uint8_t size, uint16_t color) {
   tft.setCursor(x + 1, y); tft.print(s);
 }
 
+// "NAME:" in capitals, like the show's cards
+void drawName(int x, int y) {
+  char s[MAX_NAME + 2];
+  int n = 0;
+  for (const char* p = userName; *p && n < MAX_NAME; p++) s[n++] = toupper((unsigned char)*p);
+  s[n++] = ':';
+  s[n] = 0;
+  boldText(s, x, y, 2, COL_NAME);
+}
+
 void centeredLabel(const char* s, int cx, int y) {
   tft.setTextSize(1);
   tft.setTextColor(ILI9341_WHITE);
@@ -123,12 +172,13 @@ void centeredLabel(const char* s, int cx, int y) {
   tft.print(s);
 }
 
-// Word-wraps size-1 text into lines of at most maxChars characters (a word longer
-// than a whole line gets split). Draws it when `draw` is true.
+// Word-wraps text (font size `size`) into lines of at most maxChars characters (a
+// word longer than a whole line gets split). Draws it when `draw` is true.
 // Returns how many lines the text uses; endCol/endLine (optional) get the spot
 // where the next character would go, for drawing a typing cursor.
 int layoutText(const char* text, int x, int y, int maxChars, int lineH, uint16_t color,
-               bool draw = true, int* endCol = nullptr, int* endLine = nullptr) {
+               bool draw = true, int* endCol = nullptr, int* endLine = nullptr,
+               uint8_t size = 1) {
   int col = 0, line = 0, lastLine = -1;
   for (const char* p = text; *p; p++) {
     if (*p == ' ') {                                // spaces: skipped at the start of a line
@@ -141,13 +191,29 @@ int layoutText(const char* text, int x, int y, int maxChars, int lineH, uint16_t
       if (col > 0 && col + wl > maxChars) { col = 0; line++; }
     }
     if (col >= maxChars) { col = 0; line++; }      // splits a too-long word
-    if (draw) tft.drawChar(x + col * 6, y + line * lineH, *p, color, color, 1);
+    if (draw) tft.drawChar(x + col * 6 * size, y + line * lineH, *p, color, color, size);
     col++;
     lastLine = line;
   }
   if (endCol)  *endCol = col;
   if (endLine) *endLine = line;
   return lastLine + 1;
+}
+
+// Line height for message text at each font size
+int textLineH(uint8_t size) { return size == 2 ? 18 : 11; }
+
+// Message text in a w x h box: big (size 2) when it fits, otherwise size 1.
+// Returns the size used; endCol/endLine as in layoutText().
+uint8_t fitText(const char* text, int x, int y, int w, int h, uint16_t color,
+                bool draw = true, int* endCol = nullptr, int* endLine = nullptr) {
+  uint8_t size = 2;
+  for (; size > 1; size--) {
+    int maxLines = (h - 8 * size) / textLineH(size) + 1;
+    if (layoutText(text, 0, 0, w / (6 * size), textLineH(size), 0, false, nullptr, nullptr, size) <= maxLines) break;
+  }
+  layoutText(text, x, y, w / (6 * size), textLineH(size), color, draw, endCol, endLine, size);
+  return size;
 }
 
 // ---- Icons ----------------------------------------------------------------------
@@ -157,27 +223,22 @@ void drawPlusIcon(int cx, int cy) {            // 15 x 15 plus sign (New post)
   tft.fillRoundRect(cx - 7, cy - 2, 15, 5, 1, COL_ICON);   // horizontal bar
 }
 
-void drawCameraIcon(int cx, int cy) {          // 22 x 15
-  int x = cx - 11, y = cy - 7;
-  tft.fillRect(cx - 4, y, 8, 3, COL_ICON);
-  tft.fillRoundRect(x, y + 2, 22, 13, 2, COL_ICON);
-  tft.fillCircle(cx, cy + 2, 4, COL_ICON_DK);
-  tft.fillCircle(cx, cy + 2, 2, COL_ICON);
+void drawMinusIcon(int cx, int cy) {           // 15 x 5 minus sign (Clear), matches the plus
+  tft.fillRoundRect(cx - 7, cy - 2, 15, 5, 1, COL_ICON);
 }
 
-void drawHomeIcon(int cx, int cy) {
-  tft.fillTriangle(cx - 11, cy - 1, cx + 11, cy - 1, cx, cy - 12, COL_CYAN);
-  tft.fillRect(cx - 8, cy - 1, 16, 11, COL_CYAN);
-  tft.fillRect(cx - 2, cy + 3, 5, 7, COL_PILL);   // door
+void drawHomeIcon(int cx, int cy) {           // 15 x 15 house, same size as the plus
+  tft.fillTriangle(cx - 7, cy - 1, cx + 7, cy - 1, cx, cy - 7, COL_CYAN);   // roof
+  tft.fillRect(cx - 5, cy - 1, 11, 9, COL_CYAN);
+  tft.fillRect(cx - 1, cy + 3, 3, 5, COL_PILL);   // door
 }
 
-void drawFriendsIcon(int cx, int cy) {         // three little people
-  for (int i = 0; i < 3; i++) {
-    int bx = cx - 10 + 10 * i;
-    int h = (i == 1) ? 14 : 11;
-    tft.fillCircle(bx, cy + 8 - h - 4, 3, COL_GRAY);
-    tft.fillRoundRect(bx - 4, cy + 8 - h, 8, h, 3, COL_GRAY);
-  }
+void drawClockIcon(int cx, int cy) {           // 15 x 15 ring clock at 3 o'clock (Past posts)
+  tft.fillCircle(cx, cy, 7, COL_GRAY);             // face
+  tft.fillCircle(cx, cy, 5, COL_PILL);             // hollow it into a 2 px ring
+  tft.fillRect(cx, cy - 4, 1, 5, COL_GRAY);        // minute hand, straight up
+  tft.fillRect(cx, cy, 4, 1, COL_GRAY);            // hour hand, to the right
+  tft.fillCircle(cx, cy, 1, COL_GRAY);             // centre dot
 }
 
 // ---- Feeling emojis (design-references/selecting-emojis.png) ---------------------
@@ -196,8 +257,9 @@ const char* const FEELINGS[NUM_FEELINGS] = {
   "Starstruck", "What the helly", "That's cap", "Shocked", "Sleepy",
   "Fighting to stay awake",
 };
-const int FEELING_SLEEPY = 9;
-int feeling = FEELING_SLEEPY;   // the posted feeling, shown on the card
+const int FEELING_HAPPY = 0;    // first in the list: where every new post starts
+const int NO_FEELING = -1;      // after Clear: "FEELING:" with no name or emoji
+int feeling = NO_FEELING;       // the posted feeling, shown on the card (none until the first post)
 
 #define EMOJI_FRAME_MS 300      // time between an emoji's animation frames (higher = calmer)
 
@@ -243,10 +305,23 @@ void openEye(int cx, int cy, int r, uint16_t iris, int pupil, int pdx = 0, int p
   g->fillCircle(cx + pdx, cy + pdy, pupil, COL_INK);
 }
 
+// Closed fist, knuckles up, in the same style as the rock hand: a wrist, a
+// rounded-square hand with finger creases along the top and a thumb folded
+// across the front. Fits in the same space as the old round fist.
 void fist(int cx, int cy) {
-  g->fillCircle(cx, cy, es(3), COL_FIST);
-  g->drawCircle(cx, cy, es(3), COL_FACE_LN);
-  g->drawFastHLine(cx - es(2), cy, es(4), COL_FACE_LN);     // finger crease
+  int w = es(7), h = es(6);
+  int x = cx - w / 2, y = cy - h / 2;
+  int ww = max(2, es(4));                                       // wrist
+  g->fillRect(cx - ww / 2, y + h - 1, ww, es(3), COL_FIST);
+  g->drawFastVLine(cx - ww / 2, y + h - 1, es(3), COL_FACE_LN);
+  g->drawFastVLine(cx - ww / 2 + ww - 1, y + h - 1, es(3), COL_FACE_LN);
+  g->fillRoundRect(x, y, w, h, 2, COL_FIST);                    // hand
+  g->drawRoundRect(x, y, w, h, 2, COL_FACE_LN);
+  for (int i = 1; i <= 3; i++)                                  // gaps between the 4 fingers
+    g->drawFastVLine(x + i * w / 4, y, max(1, h / 2 - 1), COL_FACE_LN);
+  int ty = y + h / 2 + (h >= 6 ? 1 : 0);                        // thumb across the front
+  g->drawFastHLine(x + 1, ty, w * 2 / 3, COL_FACE_LN);
+  g->drawFastVLine(x + w * 2 / 3, ty - 1, 2, COL_FACE_LN);      // thumb tip
 }
 
 void grin(int cx, int cy, int rx, int ry) {    // big open grin with white teeth
@@ -299,13 +374,16 @@ void drawEmoji(int idx, int cx, int cy, int r, int frame = 0) {
       g->fillCircle(cx + es(4) + LOOK[f], cy - es(2), es(2), C565(30, 30, 120));
       grin(cx, cy + es(3), es(4), es(3));
       break;
-    case 1:   // Super pumped: fists pumping (taking turns), laughing
-      fist(cx - es(8), cy - es(9) - (up ? 1 : 0));
-      fist(cx + es(8), cy - es(9) - (up ? 0 : 1));
+    case 1: { // Super pumped: both fists pumping up and down together, laughing
+      const int8_t PUMP[4] = { 0, 1, 2, 1 };                 // px raised: down, up, top, down
+      int lift = PUMP[f & 3];
+      fist(cx - es(8), cy - es(9) - lift);
+      fist(cx + es(8), cy - es(9) - lift);
       closedEye(cx - es(4), cy - es(2), true);
       closedEye(cx + es(4), cy - es(2), true);
       grin(cx, cy + es(2), es(6), es(5));
       break;
+    }
     case 2:   // Rizzler: sunglasses, smirk
       g->fillRect(cx - es(10), cy - es(3), es(20), max(1, es(1.5f)), COL_INK);
       g->fillRoundRect(cx - es(8), cy - es(3), es(7), es(5), 2, COL_INK);
@@ -323,7 +401,16 @@ void drawEmoji(int idx, int cx, int cy, int r, int frame = 0) {
       closedEye(cx + es(4), cy - es(1), true);
       g->fillCircle(cx - es(6), cy + es(3), es(2), C565(250, 140, 130));
       g->fillCircle(cx + es(6), cy + es(3), es(2), C565(250, 140, 130));
-      g->fillCircle(cx, cy + es(5), max(1, es(1.8f)), C565(220, 40, 40));
+      { // kissy mouth: a puckered "3", pushed out a pixel when the heart floats up
+        int mx = cx + (up ? 1 : 0), my = cy + es(5);
+        int a = max(1, es(1.5f)), b = max(2, es(3));
+        for (int t = 0; t < 2; t++) {                    // two passes = 2 px thick
+          g->drawLine(mx - a + t, my - b, mx + a + t, my - b / 2, COL_FACE_LN);
+          g->drawLine(mx + a + t, my - b / 2, mx + t, my, COL_FACE_LN);
+          g->drawLine(mx + t, my, mx + a + t, my + b / 2, COL_FACE_LN);
+          g->drawLine(mx + a + t, my + b / 2, mx - a + t, my + b, COL_FACE_LN);
+        }
+      }
       break;
     }
     case 4: { // Rock n roll baby: rocking hand over one eye, other eye wide, open mouth
@@ -457,9 +544,14 @@ void updateEmojis() {
 // "FEELING: <name>" plus the (animated) emoji, inside a strip at (x0, stripY)
 // of size w x h. `above` is the color just above the strip, where accessories
 // like the heart or the hair can poke out. A name too long for one line wraps.
-void drawFeelingStrip(int idx, int x0, int stripY, int w, int h, int emojiR, uint16_t above) {
+// big: "FEELING:" at size 2 on its own line with the feeling name under it
+// (size 2 when it fits on one line, otherwise size 1). Needs h >= 44.
+void drawFeelingStrip(int idx, int x0, int stripY, int w, int h, int emojiR, uint16_t above,
+                      bool big = false) {
   int ty = stripY + (h - 8) / 2;
-  boldText("FEELING:", x0 + 8, ty, 1, COL_FEEL);
+  if (big) boldText("FEELING:", x0 + 8, stripY + 4, 2, COL_FEEL);
+  else     boldText("FEELING:", x0 + 8, ty, 1, COL_FEEL);
+  if (idx == NO_FEELING) return;                       // cleared: just the label
 
   // Emoji spot: keeps clear of the card's rounded bottom-right corner
   int ex = x0 + w - 12 - emojiR, ey = stripY + h / 2;
@@ -467,12 +559,21 @@ void drawFeelingStrip(int idx, int x0, int stripY, int w, int h, int emojiR, uin
   int top = max(ey - (emojiR * 14 / 10 + 2), stripY - 6);
   int bottom = min(ey + emojiR + 2, stripY + h - 1);
 
-  int maxChars = (ex - hw - 2 - (x0 + 62)) / 6;
   const char* name = FEELINGS[idx];
-  int lines = layoutText(name, 0, 0, maxChars, 10, 0, false);
-  int ny = (lines > 1) ? stripY + (h - 18) / 2 : ty;
-  layoutText(name, x0 + 62, ny, maxChars, 10, COL_MOOD);       // drawn twice = bold
-  layoutText(name, x0 + 63, ny, maxChars, 10, COL_MOOD);
+  if (big) {
+    int nx = x0 + 8, avail = ex - hw - 2 - nx;
+    int lineY = stripY + 24, lineH = h - 4 - 24;       // the space under "FEELING:"
+    uint8_t size = (int)strlen(name) * 12 <= avail ? 2 : 1;
+    int ny = lineY + (lineH - 8 * size) / 2;
+    for (int b = 0; b < 2; b++)                        // drawn twice = bold
+      layoutText(name, nx + b, ny, avail / (6 * size), 10, COL_MOOD, true, nullptr, nullptr, size);
+  } else {
+    int maxChars = (ex - hw - 2 - (x0 + 62)) / 6;
+    int lines = layoutText(name, 0, 0, maxChars, 10, 0, false);
+    int ny = (lines > 1) ? stripY + (h - 18) / 2 : ty;
+    layoutText(name, x0 + 62, ny, maxChars, 10, COL_MOOD);     // drawn twice = bold
+    layoutText(name, x0 + 63, ny, maxChars, 10, COL_MOOD);
+  }
 
   EmojiSpot s = {};
   s.idx = idx; s.cx = ex; s.cy = ey; s.r = emojiR;
@@ -482,17 +583,302 @@ void drawFeelingStrip(int idx, int x0, int stripY, int w, int h, int emojiR, uin
   setEmojiSpot(0, s);
 }
 
-// Placeholder avatar (swap for your photo bitmap later)
-void drawAvatarPlaceholder(int x, int y, int s) {
-  int cx = x + s / 2, cy = y + s / 2;
-  tft.fillRect(x, y, s, s, C565(232, 216, 192));
-  tft.fillRect(cx - 16, y + s - 12, 32, 12, C565(245, 245, 245));   // shirt
-  tft.fillCircle(cx, cy - 4, 17, C565(50, 30, 20));                 // curly hair
-  tft.fillCircle(cx, cy - 1, 12, C565(190, 140, 105));              // face
-  tft.drawRect(cx - 10, cy - 4, 8, 6, COL_ICON_DK);                 // glasses
-  tft.drawRect(cx + 2,  cy - 4, 8, 6, COL_ICON_DK);
-  tft.drawFastHLine(cx - 2, cy - 2, 4, COL_ICON_DK);
-  tft.drawRect(x, y, s, s, ILI9341_WHITE);
+// ---- Avatar ---------------------------------------------------------------------
+//
+// The profile picture, built from the options picked on the avatar screen
+// (tap the picture or the pink UPDATE panel). Drawn in a 100 x 100 design space
+// and scaled to any size: 46 px on TheSlap screen, 100 px on the avatar screen.
+
+enum AvatarOpt { OPT_GENDER, OPT_SKIN, OPT_HAIR, OPT_HAIR_COL, OPT_EYES, OPT_ACC,
+                 OPT_SHIRT, OPT_BG, NUM_OPTS };
+const char* const OPT_LABELS[NUM_OPTS] = {
+  "Gender", "Skin", "Hair", "Hair col", "Eyes", "Accessory", "Shirt", "Backdrop" };
+
+const char* const GENDERS[] = { "Girl", "Boy" };
+const uint16_t SKINS[] = { C565(255, 219, 196), C565(241, 194, 150), C565(224, 172, 120),
+                           C565(190, 140, 105), C565(141,  85,  36), C565( 92,  58,  33) };
+const char* const HAIRS[] = { "Curly", "Short", "Long", "Ponytail", "Buns", "Buzz" };
+const int HAIR_CURLY = 0, HAIR_SHORT = 1, HAIR_LONG = 2, HAIR_PONY = 3, HAIR_BUNS = 4, HAIR_BUZZ = 5;
+// Dark brown, auburn, blonde, pink, blue
+const uint16_t HAIR_COLS[] = { C565( 50,  30,  20), C565(140,  58,  30),
+                               C565(230, 195,  90), C565(255, 110, 180), C565( 90, 140, 255) };
+const char* const EYE_NAMES[] = { "Brown", "Blue", "Green", "Gray" };
+const uint16_t EYE_COLS[] = { C565(110, 60, 25), C565(60, 140, 220), C565(60, 160, 90), C565(130, 140, 150) };
+// Accessories: a pink bow (top right of the head), a headband, a knit hat, or round glasses
+const char* const ACCS[] = { "None", "Bow", "Headband", "Hat", "Glasses" };
+const int ACC_BOW = 1, ACC_HEADBAND = 2, ACC_HAT = 3, ACC_GLASSES = 4;
+const uint16_t COL_BOW      = C565(255, 105, 180);
+const uint16_t COL_HEADBAND = C565( 70, 190, 200);   // teal
+const uint16_t COL_HAT      = C565(235,  85,  95);   // red knit
+const uint16_t COL_HAT_CUFF = C565(250, 240, 225);   // cream cuff + pompom
+const uint16_t SHIRTS[] = { C565(245, 245, 245), C565(240,  53, 154), C565( 92, 176, 228),
+                            C565(150,  90, 230), C565( 80, 200, 120), C565(255, 200,  80) };
+// Backdrop behind the avatar: cream, pink, sky, mint, lavender, peach
+const uint16_t BACKDROPS[] = { C565(232, 216, 192), C565(255, 200, 222), C565(190, 225, 255),
+                               C565(200, 240, 210), C565(220, 205, 255), C565(255, 215, 170) };
+
+// How many choices each option has (same order as AvatarOpt)
+const uint8_t OPT_COUNT[NUM_OPTS] = { 2, 6, 6, 5, 4, 5, 6, 6 };
+
+// The saved avatar. Starts close to the old placeholder: curly dark hair, glasses.
+const uint8_t DEFAULT_AVATAR[NUM_OPTS] = { 0, 3, HAIR_CURLY, 0, 0, ACC_GLASSES, 0, 0 };
+uint8_t avatar[NUM_OPTS] = { 0, 3, HAIR_CURLY, 0, 0, ACC_GLASSES, 0, 0 };
+
+// Draws avatar `a` into d with its top-left corner at (x, y), s px square.
+// Animal Crossing-ish: big round head on a small body, tall sparkly eyes,
+// blushy cheeks, a tiny smile, and chunky rounded hair.
+void drawAvatarTo(Adafruit_GFX& d, int x, int y, int s, const uint8_t* a) {
+  auto P = [&](float v) { return (int)lroundf(v * s / 100.0f); };   // design units -> px
+  auto X = [&](float v) { return x + P(v); };
+  auto Y = [&](float v) { return y + P(v); };
+  auto R = [&](float v) { int r = P(v); return r < 1 ? 1 : r; };    // radii never vanish
+  // Filled ellipse in design units (Adafruit_GFX has no fillEllipse)
+  auto E = [&](float cx, float cy, float rx, float ry, uint16_t c) {
+    float pcx = x + cx * s / 100.0f, pcy = y + cy * s / 100.0f;
+    float prx = fmaxf(rx * s / 100.0f, 0.5f), pry = fmaxf(ry * s / 100.0f, 0.5f);
+    for (int py = (int)ceilf(pcy - pry); py <= (int)floorf(pcy + pry); py++) {
+      float t = (py - pcy) / pry;
+      float hw = prx * sqrtf(fmaxf(0.0f, 1 - t * t));
+      int xl = (int)lroundf(pcx - hw), xr = (int)lroundf(pcx + hw);
+      d.drawFastHLine(xl, py, xr - xl + 1, c);
+    }
+  };
+  bool big = s >= 60;                                                // room for small details
+
+  bool girl = a[OPT_GENDER] == 0;
+  int style = a[OPT_HAIR];
+  uint16_t skin  = SKINS[a[OPT_SKIN]];
+  uint16_t hair  = HAIR_COLS[a[OPT_HAIR_COL]];
+  uint16_t shirt = SHIRTS[a[OPT_SHIRT]];
+  uint16_t ink   = C565(45, 30, 35);                                 // eyes, mouth, glasses
+
+  d.fillRect(x, y, s, s, BACKDROPS[a[OPT_BG]]);
+
+  // Hair detail colors: strands are darker (lighter on the darkest hair, so
+  // they still show) and the shine is a soft highlight
+  uint16_t strand = a[OPT_HAIR_COL] == 0 ? lerp565(hair, 0xFFFF, 0.22f) : lerp565(hair, 0, 0.3f);
+  uint16_t shine  = lerp565(hair, 0xFFFF, 0.4f);
+  // 1 px line and quadratic curve in design units (strands only show on big avatars)
+  auto L = [&](float x0, float y0, float x1, float y1) {
+    if (big) d.drawLine(X(x0), Y(y0), X(x1), Y(y1), strand);
+  };
+  auto Q = [&](float x0, float y0, float cx, float cy, float x1, float y1) {
+    float px = x0, py = y0;
+    for (int i = 1; i <= 6; i++) {
+      float t = i / 6.0f, u = 1 - t;
+      float nx = u * u * x0 + 2 * u * t * cx + t * t * x1, ny = u * u * y0 + 2 * u * t * cy + t * t * y1;
+      L(px, py, nx, ny);
+      px = nx; py = ny;
+    }
+  };
+  // Highlight along an elliptical arc (degrees, 0 = right, 270 = top)
+  auto shineArc = [&](float cx, float cy, float rx, float ry, int deg0, int deg1) {
+    if (!big) return;
+    for (int deg = deg0; deg <= deg1; deg += 3) {
+      float t = deg * PI / 180;
+      E(cx + rx * cosf(t), cy + ry * sinf(t), 1.2f, 1.2f, shine);
+    }
+  };
+
+  // Hair behind the head
+  if (style == HAIR_LONG) {
+    d.fillRoundRect(X(17), Y(34), P(66), P(56), R(16), hair);
+    Q(21, 50, 19, 70, 23, 86); Q(26, 56, 24, 74, 28, 88);           // strands falling past the shoulders
+    Q(79, 50, 81, 70, 77, 86); Q(74, 56, 76, 74, 72, 88);
+  }
+  if (style == HAIR_PONY) {                                          // tail hanging at the side
+    E(86, 52, 9, 15, hair);
+    Q(83, 40, 81, 52, 84, 64); Q(88, 41, 87, 54, 89, 63);
+    shineArc(86, 52, 6, 11, 190, 230);
+  }
+  if (style == HAIR_BUNS) {
+    for (int bx : { 24, 76 }) {
+      E(bx, 20, 11, 11, hair);
+      if (big) d.drawCircleHelper(X(bx), Y(20), R(6), bx < 50 ? 0x1 | 0x8 : 0x2 | 0x4, strand);   // wound-up swirl
+      shineArc(bx, 20, 7.5f, 7.5f, 215, 250);
+    }
+  }
+  if (style == HAIR_CURLY) {
+    for (int deg = 160; deg <= 380; deg += 30) {                     // fluffy bumps around the top
+      float t = deg * PI / 180;
+      float bx = 50 + 33 * cosf(t), by = 42 + 28 * sinf(t);
+      E(bx, by, 9, 9, hair);
+      if (big) d.drawCircleHelper(X(bx), Y(by), R(4), 0x2 | 0x4, strand);   // little curl
+    }
+  }
+
+  // Small body with rounded shoulders (drawn before the head so the chin overlaps it).
+  // Girls: tank top (bare shoulders, thin straps, low scoop neck).
+  // Boys: t-shirt (short sleeves, high crew neck).
+  auto torso = [&](float x0, float w, float top, float rad, uint16_t c) {   // rounded top corners only
+    int sr = R(rad), sTop = Y(top);
+    for (int py = sTop; py < y + s; py++) {
+      int dy = sTop + sr - py, inset = 0;
+      if (dy > 0) inset = sr - (int)sqrtf((float)(sr * sr - dy * dy));
+      d.drawFastHLine(X(x0) + inset, py, P(w) - 2 * inset, c);
+    }
+  };
+  uint16_t seam = lerp565(shirt, 0, 0.18f);                          // hems and seams
+  if (girl) {
+    torso(28, 44, 72, 10, skin);                                     // shoulders and arms
+    torso(33, 34, 77, 3, shirt);                                     // tank top body
+    d.fillRect(X(34), Y(72), P(6), Y(78) - Y(72), shirt);            // straps
+    d.fillRect(X(60), Y(72), P(6), Y(78) - Y(72), shirt);
+    E(50, 77, 10.5f, 8, skin);                                       // low scoop neck
+    if (big) {
+      d.drawCircleHelper(X(50), Y(77), R(10.5f), 0x4 | 0x8, seam);   // neckline hem
+      d.drawFastVLine(X(32.5f), Y(80), y + s - Y(80), seam);           // arm / top edge
+      d.drawFastVLine(X(67.5f), Y(80), y + s - Y(80), seam);
+    }
+  } else {
+    torso(26, 48, 72, 11, shirt);                                    // t-shirt with sleeves
+    d.fillRect(X(23), Y(88), P(7), y + s - Y(88), skin);             // arms below the sleeves
+    d.fillRect(X(70), Y(88), P(7), y + s - Y(88), skin);
+    E(50, 73.5f, 6.5f, 3.5f, skin);                                  // high crew neck
+    if (big) {
+      d.drawCircleHelper(X(50), Y(73.5f), R(6.5f), 0x4 | 0x8, seam); // neck ribbing
+      d.drawFastHLine(X(23), Y(88), P(7), seam);                     // sleeve hems
+      d.drawFastHLine(X(70), Y(88), P(7), seam);
+      d.drawFastVLine(X(30), Y(80), Y(88) - Y(80), seam);              // sleeve seams
+      d.drawFastVLine(X(70), Y(80), Y(88) - Y(80), seam);
+    }
+  }
+
+  // Hair mass framing the face (just a thin cap for the buzz cut)
+  if (style == HAIR_BUZZ) E(50, 44, 30, 24, hair);
+  else E(50, 42, 33, 28, hair);
+  if (style == HAIR_PONY) E(79, 35, 4, 4, lerp565(hair, 0xFFFF, 0.45f));   // hair tie
+
+  E(50, 49, 28, 24, skin);                                           // big round face
+
+  // Fringe, then strands and shine on top
+  switch (style) {
+    case HAIR_CURLY:                                                 // row of curls
+      for (int cx = 30; cx <= 70; cx += 10) {
+        float cy = (cx == 30 || cx == 70) ? 33 : 29;
+        E(cx, cy, 7, 7, hair);
+        if (big) d.drawCircleHelper(X(cx), Y(cy), R(3.5f), 0x2 | 0x4, strand);
+      }
+      shineArc(50, 42, 27, 22, 222, 252);
+      break;
+    case HAIR_SHORT:                                                 // side swoop + a little tuft
+      E(42, 28, 22, 9, hair);
+      E(67, 29, 13, 7, hair);
+      d.fillTriangle(X(47), Y(11), X(56), Y(19), X(45), Y(19), hair);
+      Q(24, 27, 32, 30, 36, 36); Q(33, 22, 42, 26, 48, 35); Q(44, 20, 54, 24, 58, 33);   // swoop strands
+      Q(62, 23, 68, 26, 74, 33);
+      L(50, 13, 51, 19);                                             // tuft
+      shineArc(50, 42, 27, 22, 228, 258);
+      break;
+    case HAIR_LONG: {                                                // side part, bangs swept across
+      L(37, 14, 37, 24);                                             // the part
+      E(28, 31, 7, 10, hair);                                        // short piece left of the part
+      for (int i = 0; i <= 12; i++) {                                // swoop: curve of shrinking blobs
+        float t = i / 12.0f, u = 1 - t;
+        float cx = u * u * 45 + 2 * u * t * 62 + t * t * 75;
+        float cy = u * u * 25 + 2 * u * t * 30 + t * t * 43;
+        float r = 8 - 3 * t;
+        E(cx, cy, r, r, hair);
+      }
+      d.fillRoundRect(X(19), Y(36), P(9), P(40), R(4), hair);        // side locks
+      d.fillRoundRect(X(72), Y(38), P(9), P(38), R(4), hair);
+      Q(40, 20, 58, 23, 74, 38); Q(43, 28, 60, 33, 71, 46);          // swoop strands
+      Q(26, 24, 24, 30, 25, 38);
+      L(23, 42, 23, 72); L(76, 44, 76, 72);                          // side lock strands
+      shineArc(50, 42, 27, 22, 205, 228);
+      shineArc(50, 42, 27, 22, 300, 318);
+      break;
+    }
+    case HAIR_PONY:
+    case HAIR_BUNS:                                                  // middle part
+      E(38, 29, 14, 8, hair);
+      E(62, 29, 14, 8, hair);
+      L(50, 15, 50, 23);                                             // the part
+      Q(49, 23, 38, 24, 28, 32); Q(51, 23, 62, 24, 72, 32);          // combed to the sides
+      Q(47, 18, 34, 19, 25, 27); Q(53, 18, 66, 19, 75, 27);
+      shineArc(50, 42, 27, 22, 222, 248);
+      break;
+    case HAIR_BUZZ:
+      shineArc(50, 44, 25, 20, 228, 255);
+      break;
+  }
+
+  // Blushy cheeks
+  uint16_t blush = lerp565(skin, C565(255, 120, 150), 0.45f);
+  E(31, 59, 5, 3, blush);
+  E(69, 59, 5, 3, blush);
+
+  // Tall oval eyes: dark outline, colored iris, pupil, one sparkle (top left)
+  for (int ex : { 39, 61 }) {
+    E(ex, 51, 5, 6.5f, ink);
+    E(ex, 52.5f, 3.5f, 4.5f, EYE_COLS[a[OPT_EYES]]);
+    E(ex, 53, 2, 2.5f, ink);
+    E(ex - 1.5f, 48.5f, 1.8f, 1.8f, 0xFFFF);                         // sparkle
+    if (girl && big) {                                               // two lashes on the outer side
+      int o = ex < 50 ? -1 : 1;
+      d.drawLine(X(ex + o * 4), Y(46), X(ex + o * 7), Y(43), ink);
+      d.drawLine(X(ex + o * 5), Y(48.5f), X(ex + o * 8), Y(47), ink);
+    }
+  }
+
+  // Tiny nose and smile
+  E(50, 56.5f, 1.2f, 0.9f, lerp565(skin, 0, 0.3f));
+  d.drawCircleHelper(X(50), Y(59), R(3.5f), 0x4 | 0x8, ink);
+  if (big) d.drawCircleHelper(X(50), Y(59) - 1, R(3.5f), 0x4 | 0x8, ink);
+
+  // Accessory
+  int acc = a[OPT_ACC];
+  if (acc == ACC_GLASSES) {                                          // big round glasses
+    for (int ex : { 39, 61 }) {
+      d.drawCircle(X(ex), Y(51), R(9.5f), ink);
+      if (big) d.drawCircle(X(ex), Y(51), R(9.5f) - 1, ink);
+    }
+    d.drawFastHLine(X(48.5f), Y(50), X(51.5f) - X(48.5f) + 1, ink);  // bridge
+    d.drawFastHLine(X(22), Y(50), X(29.5f) - X(22), ink);            // arms
+    d.drawFastHLine(X(70.5f), Y(50), X(78) - X(70.5f), ink);
+  } else if (acc == ACC_HEADBAND) {                                  // band over the top of the hair
+    for (int deg = 196; deg <= 344; deg += 4) {
+      float t = deg * PI / 180;
+      E(50 + 31 * cosf(t), 41 + 23 * sinf(t), 2.8f, 2.8f, COL_HEADBAND);
+    }
+    if (big) {                                                       // shine along the band
+      for (int deg = 230; deg <= 290; deg += 4) {
+        float t = deg * PI / 180;
+        E(50 + 31 * cosf(t), 40 + 23 * sinf(t), 0.8f, 0.8f, lerp565(COL_HEADBAND, 0xFFFF, 0.5f));
+      }
+    }
+  } else if (acc == ACC_HAT) {                                       // knit beanie with a pompom
+    d.fillRoundRect(X(20), Y(10), P(60), P(26), R(13), COL_HAT);     // crown
+    if (big) {                                                       // knit ribs
+      uint16_t rib = lerp565(COL_HAT, 0, 0.18f);
+      for (int rx = 30; rx <= 70; rx += 10) d.drawFastVLine(X(rx), Y(rx == 30 || rx == 70 ? 17 : 13), Y(28) - Y(rx == 30 || rx == 70 ? 17 : 13), rib);
+    }
+    d.fillRoundRect(X(17), Y(28), P(66), P(9), R(4.5f), COL_HAT_CUFF);   // cuff
+    E(50, 9, 6, 6, COL_HAT_CUFF);                                    // pompom
+  } else if (acc == ACC_BOW) {                                       // pink bow, top right of the head
+    uint16_t c = COL_BOW;
+    E(63, 20, 7, 5.5f, c);
+    E(77, 20, 7, 5.5f, c);
+    if (big) {
+      E(62, 19, 3, 2, lerp565(c, 0xFFFF, 0.4f));                     // shine on each loop
+      E(76, 19, 3, 2, lerp565(c, 0xFFFF, 0.4f));
+    }
+    E(70, 20, 3, 3.5f, lerp565(c, 0, 0.25f));                        // knot
+  }
+
+  d.drawRect(x, y, s, s, 0xFFFF);                                    // white frame
+}
+
+
+// Draws the avatar off-screen first so it appears in one go (no flicker)
+void drawAvatar(int x, int y, int s, const uint8_t* a) {
+  GFXcanvas16 canvas(s, s);
+  if (canvas.getBuffer()) {
+    drawAvatarTo(canvas, 0, 0, s, a);
+    tft.drawRGBBitmap(x, y, canvas.getBuffer(), s, s);
+  } else {
+    drawAvatarTo(tft, x, y, s, a);                                   // out of memory: draw directly
+  }
 }
 
 // ---- Nav panels (shape from design-references/pear-corners.png) ------------------
@@ -523,30 +909,55 @@ int panelDepth(bool vertical, int x, int y, PanelShape shape, int i, int len, in
   return depth - r + (int)lroundf(sqrtf((float)(r * r - dx * dx)));
 }
 
+// Pixel / line that skip anything outside the rounded border, so a panel that
+// reaches past it looks tucked under the case
+void clipPixel(int x, int y, uint16_t c) {
+  if (insideBorder(x, y, 0)) tft.drawPixel(x, y, c);
+}
+void clipLine(int x0, int y0, int x1, int y1, uint16_t c) {
+  int dx = abs(x1 - x0), dy = -abs(y1 - y0);
+  int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, err = dx + dy;
+  for (;;) {
+    clipPixel(x0, y0, c);
+    if (x0 == x1 && y0 == y1) break;
+    int e2 = 2 * err;
+    if (e2 >= dy) { err += dy; x0 += sx; }
+    if (e2 <= dx) { err += dx; y0 += sy; }
+  }
+}
+
 void drawPanel(bool vertical, int x, int y, int len, int depth, PanelShape shape, int r) {
   // Fill
   for (int i = 0; i < len; i++) {
     int d = panelDepth(vertical, x, y, shape, i, len, depth, r);
-    if (vertical) tft.drawFastHLine(x - d + 1, y + i, d, COL_PILL);
-    else          tft.drawFastVLine(x + i, y, d, COL_PILL);
+    if (vertical) {
+      int xl, xr;
+      rowExtent(y + i, xl, xr);
+      int a = max(x - d + 1, xl), b = min(x, xr);
+      if (b >= a) tft.drawFastHLine(a, y + i, b - a + 1, COL_PILL);
+    } else {
+      int h = d;                                       // trim the column to the border
+      while (h > 0 && !insideBorder(x + i, y + h - 1, 0)) h--;
+      if (h > 0 && insideBorder(x + i, y, 0)) tft.drawFastVLine(x + i, y, h, COL_PILL);
+    }
   }
   // Outline: straight edge, shaped edge, and the two end sides
   int prev = 0;
   for (int i = 0; i < len; i++) {
     int d = panelDepth(vertical, x, y, shape, i, len, depth, r);
     if (vertical) {
-      tft.drawPixel(x, y + i, COL_PINK_EDG);
+      clipPixel(x, y + i, COL_PINK_EDG);
       int ex = x - d + 1;
-      if (i == 0) tft.drawFastHLine(ex, y, d, COL_PINK_EDG);
-      else        tft.drawLine(prev, y + i - 1, ex, y + i, COL_PINK_EDG);
-      if (i == len - 1) tft.drawFastHLine(ex, y + i, d, COL_PINK_EDG);
+      if (i == 0) clipLine(ex, y, x, y, COL_PINK_EDG);
+      else        clipLine(prev, y + i - 1, ex, y + i, COL_PINK_EDG);
+      if (i == len - 1) clipLine(ex, y + i, x, y + i, COL_PINK_EDG);
       prev = ex;
     } else {
-      tft.drawPixel(x + i, y, COL_PINK_EDG);
+      clipPixel(x + i, y, COL_PINK_EDG);
       int ey = y + d - 1;
-      if (i == 0) tft.drawFastVLine(x, y, d, COL_PINK_EDG);
-      else        tft.drawLine(x + i - 1, prev, x + i, ey, COL_PINK_EDG);
-      if (i == len - 1) tft.drawFastVLine(x + i, y, d, COL_PINK_EDG);
+      if (i == 0) clipLine(x, y, x, ey, COL_PINK_EDG);
+      else        clipLine(x + i - 1, prev, x + i, ey, COL_PINK_EDG);
+      if (i == len - 1) clipLine(x + i, y, x + i, ey, COL_PINK_EDG);
       prev = ey;
     }
   }
@@ -700,10 +1111,10 @@ Sparkle sparkles[NUM_SPARKLES];
 // Areas covered by UI, so sparkles never get placed on top of them
 struct Box { int16_t x, y, w, h; };
 const Box UI_BOXES[] = {
-  {  6,  68,  40,  99 },   // left nav panels (New + Photos)
+  {  6,  68,  40,  99 },   // left nav panels (New + Clear)
   { 50,  72,  58,  80 },   // pink update panel
-  { 102,  40, 200, 132 },  // message card
-  { 104, 182, 196,  44 },  // bottom nav panels (Home + Friends)
+  { 102,  40, 200, 152 },  // message card
+  { 103, 194, 198,  40 },  // bottom nav panels (Home + Past)
   { LOGO_X, LOGO_Y, LOGO_W, LOGO_H },  // The Slap logo
 };
 const int NUM_BOXES = sizeof(UI_BOXES) / sizeof(UI_BOXES[0]);
@@ -798,41 +1209,52 @@ void updateSparkles() {
 
 // ---- Screen -------------------------------------------------------------------------
 
-void drawScreen() {
-  clearEmojiSpots();
-  tft.fillScreen(ILI9341_BLACK);   // outside the border stays black
-  drawBackground();
-
-  // Left nav: New (rounded top-left) + Photos (rounded bottom-left), mirror images
-  drawPanel(true, 45, 68, 48, 40, ROUND_START, 24);  // New post: mirrors Photos: rounded top-left
-  drawPanel(true, 45, 119, 48, 40, ROUND_END, 24);
-  drawPlusIcon(26, 94);    centeredLabel("New",    26, 106);
-  drawCameraIcon(26, 132); centeredLabel("Photos", 26, 144);
-
-  // Pink UPDATE panel (partly tucked behind the card)
-  tft.fillRoundRect(50, 72, 58, 80, 6, COL_PINK);
-  drawAvatarPlaceholder(54, 78, 46);
-  boldText("UPDATE", 59, 134, 1, COL_UPDATE);
-
-  // Main card
-  const int cx0 = 104, cy0 = 42, cw = 196, ch = 128, stripH = 28;
+// The main card: name, status text, FEELING strip. Drawn on top of the pink
+// UPDATE panel's right edge, so it can be redrawn on its own (Clear does).
+void drawProfileCard() {
+  clearEmojiSpots();               // the card's emoji is the only one on this screen
+  const int cx0 = 104, cy0 = 42, cw = 196, ch = 148, stripH = 44;
   tft.fillRoundRect(cx0, cy0, cw, ch, 6, COL_STRIP);
   tft.fillRoundRect(cx0, cy0, cw, ch - stripH, 6, COL_CARD);
   tft.fillRect(cx0, cy0 + ch - stripH - 6, cw, 6, COL_CARD);   // square off the strip's top
   tft.drawRoundRect(cx0 - 1, cy0 - 1, cw + 2, ch + 2, 7, COL_PINK_EDG);
 
-  boldText("LOPI DOPI:", cx0 + 8, cy0 + 8, 2, COL_NAME);
-  layoutText(statusText, cx0 + 8, cy0 + 34, 30, 11, COL_TEXT);
-
+  drawName(cx0 + 8, cy0 + 8);
   const int stripY = cy0 + ch - stripH;
-  drawFeelingStrip(feeling, cx0, stripY, cw, stripH, 8, COL_CARD);
+  const int tx = cx0 + 8, ty = cy0 + 34, tw = cw - 16, th = stripY - 2 - ty;
+  if (statusText[0]) fitText(statusText, tx, ty, tw, th, COL_TEXT);
+  else fitText("Click New to create a new post", tx, ty, tw, th, COL_HINT);
 
-  // Bottom nav: Home (rounded bottom-left) + Friends (rounded bottom-right), mirror images
-  // Together they span the message card (x 104..299): two 97 px tabs with a 2 px gap
-  drawPanel(false, 104, 182, 97, 44, ROUND_START, 26); // mirrors Friends: rounded bottom-left
-  drawPanel(false, 203, 182, 97, 44, ROUND_END, 26);
-  drawHomeIcon(152, 198);    centeredLabel("Home",    152, 211);   // centered in each tab
-  drawFriendsIcon(251, 198); centeredLabel("Friends", 251, 211);
+  drawFeelingStrip(feeling, cx0, stripY, cw, stripH, 11, COL_CARD, true);
+}
+
+void drawScreen() {
+  clearEmojiSpots();
+  tft.fillScreen(ILI9341_BLACK);   // outside the border stays black
+  drawBackground();
+
+  // Left nav: New (rounded top-left) + Clear (rounded bottom-left), mirror images
+  drawPanel(true, 45, 68, 48, 40, ROUND_START, 24);  // New post: mirrors Clear: rounded top-left
+  drawPanel(true, 45, 119, 48, 40, ROUND_END, 24);
+  // Icon + label centered in each tab (x 6..45; y 68..115 and 119..166)
+  drawPlusIcon(26, 86);   centeredLabel("New",   26, 98);
+  drawMinusIcon(26, 135); centeredLabel("Clear", 26, 145);
+
+  // Pink UPDATE panel (partly tucked behind the card)
+  tft.fillRoundRect(50, 72, 58, 80, 6, COL_PINK);
+  drawAvatar(54, 78, 46, avatar);
+  boldText("UPDATE", 59, 134, 1, COL_UPDATE);
+
+  drawProfileCard();
+
+  // Bottom nav: Home (rounded bottom-left) + Past (rounded bottom-right), mirror images.
+  // 40 px tall like New/Clear are 40 px deep; together they span the card's width
+  // (x 103..300, 4 px gap), 3 px below it. The border clips Past's outer corner.
+  drawPanel(false, 103, 194, 97, 40, ROUND_START, 24); // mirrors Past: rounded bottom-left
+  drawPanel(false, 204, 194, 97, 40, ROUND_END, 24);
+  // Icon + label centered in each tab, laid out like New/Clear
+  drawHomeIcon(151, 207);    centeredLabel("Home",    151, 219);
+  drawClockIcon(252, 207);   centeredLabel("Past",    252, 219);
 
   drawTheSlapLogo();       // The Slap logo bitmap
   drawBorder(COL_BORDER);   // same coral border as before
@@ -840,12 +1262,35 @@ void drawScreen() {
 
 // Home tab in the bottom nav (same box as its drawPanel() call in drawScreen())
 bool homeTabAt(int x, int y) {
-  return x >= 104 && x <= 200 && y >= 182 && y <= 225;
+  return x >= 103 && x <= 199 && y >= 194 && y <= 233;
+}
+
+// Past tab in the bottom nav (same box as its drawPanel() call in drawScreen())
+bool pastTabAt(int x, int y) {
+  return x >= 204 && x <= 300 && y >= 194 && y <= 233;
 }
 
 // New post tab in the left nav (same box as its drawPanel() call in drawScreen())
 bool newTabAt(int x, int y) {
   return x >= 6 && x <= 45 && y >= 68 && y <= 115;
+}
+
+// Clear tab in the left nav (same box as its drawPanel() call in drawScreen())
+bool clearTabAt(int x, int y) {
+  return x >= 6 && x <= 45 && y >= 119 && y <= 166;
+}
+
+// Clears the status: no text, no feeling. The name and "FEELING:" stay.
+void clearStatus() {
+  statusText[0] = 0;
+  feeling = NO_FEELING;
+  drawProfileCard();
+}
+
+// Profile picture or the pink UPDATE panel around it (same box as its
+// fillRoundRect() in drawScreen(); the card covers it from x = 104)
+bool avatarTabAt(int x, int y) {
+  return x >= 50 && x <= 103 && y >= 72 && y <= 151;
 }
 
 // Draw the whole screen and start the sparkles
@@ -882,9 +1327,10 @@ void update() {
 
 // Message card (step 1). Step 2 uses the same card, taller.
 const int BOX_X = 28, BOX_Y = 33, BOX_W = 264, BOX_H = 92, BOX_STRIP_H = 20;
-const int BIG_BOX_H = 142, BIG_STRIP_H = 26;
+const int BIG_BOX_H = 142, BIG_STRIP_H = 32;
 const int TEXT_X = BOX_X + 8, TEXT_Y = BOX_Y + 26;
-const int TEXT_COLS = 41, TEXT_LINES = 4, TEXT_LINE_H = 11;
+const int TEXT_COLS = 41, TEXT_LINES = 4, TEXT_LINE_H = 11;   // size-1 limits
+const int TEXT_W = TEXT_COLS * 6;
 
 // Pills in the card's top-right corner. Their tap areas are much bigger than
 // the pills: everything above the text, out to the screen edge.
@@ -906,7 +1352,6 @@ const int TRAY_X = BOX_X, TRAY_Y = BOX_Y + BIG_BOX_H + 5, TRAY_W = BOX_W, TRAY_H
 const int EMOJI_PITCH = TRAY_W / NUM_FEELINGS;       // 24 px per emoji
 const int EMOJI_R = 9;
 
-#define COL_HINT     C565(120, 140, 165)   // "What's on your mind?" placeholder
 #define COL_KB_BG    C565(165, 222, 246)   // keyboard background (a bit deeper than the card)
 #define COL_KEY      C565(228, 248, 255)   // letter keys (lightest blue)
 #define COL_KEY_SPEC C565( 92, 176, 228)   // shift, backspace, 123, Go, Cancel, Back (darker blue)
@@ -933,7 +1378,7 @@ int draftLen = 0;
 bool shiftOn = true;          // one-shot capitals, on for the first letter
 bool numbersOn = false;       // 123 layer showing
 bool picking = false;         // step 2 (emoji tray) showing
-int pickedFeeling = FEELING_SLEEPY;
+int pickedFeeling = FEELING_HAPPY;
 
 // Special key codes (every other key types its own character)
 const char KEY_SHIFT = 1, KEY_NUMS = 2, KEY_GO = 3, KEY_BACK = '\b';
@@ -1033,10 +1478,15 @@ void drawKeyboard() {
   drawBorder(COL_BORDER);   // repaint the border's inner edge over the fill
 }
 
+// A PILL_W x PILL_H pill button with a white label
+void drawPillAt(int x, int y, const char* label, uint16_t fill) {
+  tft.fillRoundRect(x, y, PILL_W, PILL_H, 8, fill);
+  centerIn(x, y, PILL_W, PILL_H, label, 1, ILI9341_WHITE);
+}
+
 // A pill button in the card's top-right corner
 void drawPill(int x, const char* label, uint16_t fill) {
-  tft.fillRoundRect(x, PILL_Y, PILL_W, PILL_H, 8, fill);
-  centerIn(x, PILL_Y, PILL_W, PILL_H, label, 1, ILI9341_WHITE);
+  drawPillAt(x, PILL_Y, label, fill);
 }
 
 // The card: light-blue body, cyan FEELING strip at the bottom, pink outline
@@ -1046,7 +1496,7 @@ void drawCard(int h, int stripH) {
   tft.fillRoundRect(BOX_X, BOX_Y, BOX_W, h - stripH, 6, COL_CARD);
   tft.fillRect(BOX_X, stripY - 6, BOX_W, 6, COL_CARD);      // square off the strip's top
   tft.drawRoundRect(BOX_X - 1, BOX_Y - 1, BOX_W + 2, h + 2, 7, COL_PINK_EDG);
-  boldText("LOPI DOPI:", BOX_X + 8, BOX_Y + 6, 2, COL_NAME);  // top left, like the posted card
+  drawName(BOX_X + 8, BOX_Y + 6);  // top left, like the posted card
 }
 
 // Redraws just the FEELING strip of the card (its bottom corners stay rounded)
@@ -1061,10 +1511,11 @@ void drawStrip(int h, int stripH, int emojiR) {
 void drawComposeText() {
   int stripY = BOX_Y + BOX_H - BOX_STRIP_H;
   tft.fillRect(BOX_X + 2, TEXT_Y - 2, BOX_W - 4, stripY - TEXT_Y + 2, COL_CARD);
-  int col = 0, line = 0;
-  if (draftLen == 0) layoutText("What's on your mind?", TEXT_X, TEXT_Y, TEXT_COLS, TEXT_LINE_H, COL_HINT);
-  else layoutText(draft, TEXT_X, TEXT_Y, TEXT_COLS, TEXT_LINE_H, COL_TEXT, true, &col, &line);
-  tft.drawFastVLine(TEXT_X + col * 6 - 1, TEXT_Y + line * TEXT_LINE_H - 1, 10, COL_PINK);
+  int col = 0, line = 0, th = stripY - 2 - TEXT_Y;
+  uint8_t size;
+  if (draftLen == 0) size = fitText("What's on your mind?", TEXT_X, TEXT_Y, TEXT_W, th, COL_HINT);
+  else size = fitText(draft, TEXT_X, TEXT_Y, TEXT_W, th, COL_TEXT, true, &col, &line);
+  tft.drawFastVLine(TEXT_X + col * 6 * size - 1, TEXT_Y + line * textLineH(size) - 1, 8 * size + 2, COL_PINK);
 }
 
 // One slot of the emoji tray (a still spot), highlighted when it's the picked one
@@ -1098,8 +1549,8 @@ void drawPickingScreen() {
   drawCard(BIG_BOX_H, BIG_STRIP_H);
   drawPill(PILL_L_X, "Back", COL_KEY_SPEC);
   drawPill(PILL_R_X, "Post", COL_PINK);
-  layoutText(draft, TEXT_X, TEXT_Y, TEXT_COLS, TEXT_LINE_H, COL_TEXT);
-  drawStrip(BIG_BOX_H, BIG_STRIP_H, 10);
+  fitText(draft, TEXT_X, TEXT_Y, TEXT_W, BOX_Y + BIG_BOX_H - BIG_STRIP_H - 2 - TEXT_Y, COL_TEXT);
+  drawStrip(BIG_BOX_H, BIG_STRIP_H, 12);
 
   // Emoji tray, same cyan as the strip, rounded like the reference
   tft.fillRoundRect(TRAY_X, TRAY_Y, TRAY_W, TRAY_H, 8, COL_STRIP);
@@ -1115,7 +1566,7 @@ void showCompose() {
   picking = false;
   numbersOn = false;
   shiftOn = (draftLen == 0);
-  if (draftLen == 0) pickedFeeling = feeling;   // start from the current feeling
+  if (draftLen == 0) pickedFeeling = FEELING_HAPPY;   // a new post starts on Happy
   initKeys();
   drawTypingScreen();
 }
@@ -1191,6 +1642,7 @@ int pickingTap(int x, int y) {
     drawPill(PILL_R_X, "Post", COL_KEY_DOWN);
     strcpy(statusText, draft);
     feeling = pickedFeeling;
+    addPast(draft, pickedFeeling);   // also goes into the Past list
     draft[0] = 0;
     draftLen = 0;
     return COMPOSE_POSTED;
@@ -1210,7 +1662,7 @@ int pickingTap(int x, int y) {
       pickedFeeling = i;
       drawEmojiSlot(old);
       drawEmojiSlot(i);
-      drawStrip(BIG_BOX_H, BIG_STRIP_H, 10);
+      drawStrip(BIG_BOX_H, BIG_STRIP_H, 12);
     }
     return COMPOSE_NONE;
   }
@@ -1222,6 +1674,334 @@ int pickingTap(int x, int y) {
 // something here, or COMPOSE_MISS if it hit nothing.
 int composeTap(int x, int y) {
   return picking ? pickingTap(x, y) : typingTap(x, y);
+}
+
+// ---- Avatar screen ----------------------------------------------------------------
+//
+// Opened by tapping the profile picture or the pink UPDATE panel on TheSlap.
+// Left: a big preview in a pink panel, with Cancel / Save under it.
+// Right: a card with one row per option (gender, skin, hair, ...). Tapping a
+// row's "<" goes to the previous choice, anywhere else on the row goes to the
+// next one, and the preview redraws. Save keeps the changes, Cancel drops them.
+
+const int AV_X = 36, AV_Y = 48, AV_S = 100;                 // preview
+const int AV_PILL_Y = AV_Y + AV_S + 10;                     // Cancel / Save, under the preview
+const int AV_CANCEL_X = AV_X, AV_SAVE_X = AV_X + AV_S - PILL_W;
+const int OPT_X = 150, OPT_Y = 40, OPT_W = 148, OPT_ROW_H = 19;
+const int OPT_H = NUM_OPTS * OPT_ROW_H + 8;
+// The options card can sit anywhere (the portrait setup screen reuses it), so the
+// arrows are measured from its left edge (ox) and width (ow)
+const int OPT_ARROW_L_DX = 58;                              // "<" box (16 px wide)
+const int OPT_ARROW_R_DX = 18;                              // ">" box, from the right edge
+
+// What avatarTap() did
+const int AVATAR_MISS = -1;      // the tap didn't hit anything
+const int AVATAR_NONE = 0;       // handled, stay on this screen
+const int AVATAR_CANCEL = 1, AVATAR_SAVED = 2;
+
+const Box AVATAR_BOXES[] = {
+  { AV_X - 6, AV_Y - 6, AV_S + 12, AV_PILL_Y + PILL_H - AV_Y + 8 },      // preview + pills
+  { OPT_X - 1, OPT_Y - 1, OPT_W + 2, OPT_H + 2 },                        // options card
+};
+
+uint8_t editAvatar[NUM_OPTS];    // the avatar being edited (copied to `avatar` on Save)
+
+void drawAvatarPreview() {
+  drawAvatar(AV_X, AV_Y, AV_S, editAvatar);
+}
+
+void drawAvatarPill(int x, const char* label, uint16_t fill) {
+  drawPillAt(x, AV_PILL_Y, label, fill);
+}
+
+// One option row: label, "<", the current choice (a name or a color swatch), ">"
+void drawOptRow(int i, int ox, int oy, int ow) {
+  int ry = oy + 4 + i * OPT_ROW_H, cy = ry + 9;
+  int arrowL = ox + OPT_ARROW_L_DX, arrowR = ox + ow - OPT_ARROW_R_DX;
+  tft.fillRect(ox + 2, ry, ow - 4, OPT_ROW_H - 1, COL_CARD);
+  if (i > 0) tft.drawFastHLine(ox + 6, ry - 1, ow - 12, COL_STRIP);   // divider
+  boldText(OPT_LABELS[i], ox + 6, ry + 5, 1, COL_NAME);
+
+  tft.fillTriangle(arrowL + 11, cy - 5, arrowL + 11, cy + 5, arrowL + 5, cy, COL_PINK);
+  tft.fillTriangle(arrowR + 5, cy - 5, arrowR + 5, cy + 5, arrowR + 11, cy, COL_PINK);
+
+  int v = editAvatar[i];
+  int vx = arrowL + 16, vw = arrowR - vx;                    // value area between the arrows
+  const char* name = nullptr;
+  uint16_t swatch = 0;
+  switch (i) {
+    case OPT_GENDER:   name = GENDERS[v];   break;
+    case OPT_SKIN:     swatch = SKINS[v];   break;
+    case OPT_HAIR:     name = HAIRS[v];     break;
+    case OPT_HAIR_COL: swatch = HAIR_COLS[v]; break;
+    case OPT_EYES:     name = EYE_NAMES[v]; break;
+    case OPT_ACC:      name = ACCS[v];      break;
+    case OPT_SHIRT:    swatch = SHIRTS[v];  break;
+    case OPT_BG:       swatch = BACKDROPS[v]; break;
+  }
+  if (name) {
+    centerIn(vx, ry, vw, OPT_ROW_H - 1, name, 1, COL_TEXT);
+  } else {
+    tft.fillRoundRect(vx + vw / 2 - 15, cy - 5, 30, 11, 3, swatch);
+    tft.drawRoundRect(vx + vw / 2 - 15, cy - 5, 30, 11, 3, COL_TEXT);
+  }
+}
+
+// The whole options card (background, outline, one row per option)
+void drawOptCard(int ox, int oy, int ow) {
+  tft.fillRoundRect(ox, oy, ow, OPT_H, 6, COL_CARD);
+  tft.drawRoundRect(ox - 1, oy - 1, ow + 2, OPT_H + 2, 7, COL_PINK_EDG);
+  for (int i = 0; i < NUM_OPTS; i++) drawOptRow(i, ox, oy, ow);
+}
+
+// A tap on the options card: "<" goes to the previous choice, anywhere else on
+// the row to the next one. Updates editAvatar and redraws the row. Returns true
+// if the tap hit the card (the caller redraws its preview).
+bool optTap(int x, int y, int ox, int oy, int ow) {
+  if (!inRect(x, y, ox - 4, oy, ox + ow + 3, oy + OPT_H - 1)) return false;
+  int i = constrain((y - oy - 4) / OPT_ROW_H, 0, NUM_OPTS - 1);
+  int n = OPT_COUNT[i];
+  int arrowL = ox + OPT_ARROW_L_DX;
+  bool back = x >= arrowL - 4 && x < arrowL + 20;             // the "<"
+  editAvatar[i] = (editAvatar[i] + (back ? n - 1 : 1)) % n;
+  drawOptRow(i, ox, oy, ow);
+  return true;
+}
+
+void drawAvatarScreen() {
+  clearEmojiSpots();
+  tft.fillScreen(ILI9341_BLACK);   // outside the border stays black
+  drawBackground();
+
+  tft.fillRoundRect(AV_X - 4, AV_Y - 4, AV_S + 8, AV_S + 8, 6, COL_PINK);   // like the UPDATE panel
+  drawAvatarPreview();
+  drawAvatarPill(AV_CANCEL_X, "Cancel", COL_KEY_SPEC);
+  drawAvatarPill(AV_SAVE_X, "Save", COL_PINK);
+
+  drawOptCard(OPT_X, OPT_Y, OPT_W);
+
+  drawBorder(COL_BORDER);
+  initSparkles(AVATAR_BOXES, 2, 24, 200);
+}
+
+// Called when opening the avatar screen from TheSlap
+void showAvatarEditor() {
+  memcpy(editAvatar, avatar, NUM_OPTS);
+  drawAvatarScreen();
+}
+
+// Handles a tap on the avatar screen. Returns AVATAR_CANCEL or AVATAR_SAVED when
+// it's time to go back to TheSlap, AVATAR_NONE when the tap changed something
+// here, or AVATAR_MISS if it hit nothing.
+int avatarTap(int x, int y) {
+  int pillTop = AV_PILL_Y - 6, pillBot = AV_PILL_Y + PILL_H + 8;
+  int split = (AV_CANCEL_X + PILL_W + AV_SAVE_X) / 2;          // middle of the gap between the pills
+  if (inRect(x, y, AV_CANCEL_X - 6, pillTop, split - 1, pillBot)) {
+    drawAvatarPill(AV_CANCEL_X, "Cancel", COL_KEY_DOWN);       // flash so you can see it registered
+    return AVATAR_CANCEL;
+  }
+  if (inRect(x, y, split, pillTop, AV_SAVE_X + PILL_W + 6, pillBot)) {
+    drawAvatarPill(AV_SAVE_X, "Save", COL_KEY_DOWN);
+    memcpy(avatar, editAvatar, NUM_OPTS);
+    return AVATAR_SAVED;
+  }
+  if (optTap(x, y, OPT_X, OPT_Y, OPT_W)) {
+    drawAvatarPreview();
+    return AVATAR_NONE;
+  }
+  return AVATAR_MISS;
+}
+
+// ---- Past posts screens -------------------------------------------------------------
+//
+// 1. The list: every saved post as a "POST #N" row, newest first, 5 to a page.
+//    The ▲ / ▼ buttons on the right page toward newer / older posts; Back
+//    (centered under the list) goes back to TheSlap.
+// 2. One post: the message card with its text and feeling over the starry
+//    background, and a Back pill that returns to the list (same page).
+
+const int PAST_ROWS = 5;                                   // rows per page
+const int PAST_ROW_X = 56, PAST_ROW_Y = 38, PAST_ROW_W = 188, PAST_ROW_H = 26, PAST_PITCH = 31;
+const int PAST_TITLE_X = 100, PAST_TITLE_Y = 14;
+const int PAST_ARROW_X = 256, PAST_ARROW_W = 32, PAST_ARROW_H = 44;
+const int PAST_UP_Y = PAST_ROW_Y;                                          // ▲ (newer)
+const int PAST_DOWN_Y = PAST_ROW_Y + (PAST_ROWS - 1) * PAST_PITCH + PAST_ROW_H - PAST_ARROW_H;  // ▼ (older)
+// Rows + arrow column: the part redrawn when the page changes
+const int PAST_LIST_X0 = 50, PAST_LIST_Y0 = 34, PAST_LIST_X1 = 292,
+          PAST_LIST_Y1 = PAST_ROW_Y + (PAST_ROWS - 1) * PAST_PITCH + PAST_ROW_H + 3;   // 191
+
+// Back pills on both past screens: 25% bigger than the other pills, centered
+// left to right, and drawn by drawBigPill()
+const int BIG_PILL_W = PILL_W * 5 / 4, BIG_PILL_H = PILL_H * 5 / 4;   // 57 x 21
+const int BIG_PILL_X = BOX_X + (BOX_W - BIG_PILL_W) / 2;
+// List screen: centered in the space between the list and the bottom border
+const int PAST_BACK_Y = (PAST_LIST_Y1 + SCREEN_H - LINE_THICKNESS - BIG_PILL_H) / 2;
+
+const int PAST_MISS = -1;        // the tap didn't hit anything
+const int PAST_NONE = 0;         // handled, stay on this screen (page changed)
+const int PAST_BACK = 1, PAST_OPEN = 2;
+const int PAST_POST_MISS = -1, PAST_POST_BACK = 1;
+
+const Box PAST_BOXES[] = {
+  { PAST_TITLE_X - 4, PAST_TITLE_Y - 4, 128, 24 },                                    // title
+  { BIG_PILL_X - 4, PAST_BACK_Y - 4, BIG_PILL_W + 8, BIG_PILL_H + 8 },                 // Back pill
+  { PAST_LIST_X0, PAST_LIST_Y0, PAST_LIST_X1 - PAST_LIST_X0 + 1, PAST_LIST_Y1 - PAST_LIST_Y0 + 1 },
+};
+// Back pill on the single post screen: centered in the space between the
+// bottom of the message card and the bottom border
+const int PP_BACK_Y = (BOX_Y + BIG_BOX_H + SCREEN_H - LINE_THICKNESS - BIG_PILL_H) / 2;
+const Box PAST_POST_BOXES[] = {
+  { BOX_X - 1, BOX_Y - 1, BOX_W + 2, BIG_BOX_H + 2 },      // big message card
+  { BIG_PILL_X - 4, PP_BACK_Y - 4, BIG_PILL_W + 8, BIG_PILL_H + 8 }, // Back pill
+};
+
+// A centered BIG_PILL_W x BIG_PILL_H "Back" pill at height y
+void drawBigBack(int y, uint16_t fill) {
+  tft.fillRoundRect(BIG_PILL_X, y, BIG_PILL_W, BIG_PILL_H, BIG_PILL_H / 2, fill);
+  centerIn(BIG_PILL_X, y, BIG_PILL_W, BIG_PILL_H, "Back", 1, ILI9341_WHITE);
+}
+
+int pastPage = 0;                // page showing (0 = the newest posts)
+int pastOpen = 0;                // index into past[] of the post being viewed
+
+int pastPages() { return max(1, (numPast + PAST_ROWS - 1) / PAST_ROWS); }
+
+// Index into past[] for row i of the current page, or -1 if that row is empty
+int pastIndexAt(int row) {
+  int k = pastPage * PAST_ROWS + row;                      // 0 = newest
+  return k < numPast ? numPast - 1 - k : -1;
+}
+
+void drawPastRow(int row, bool pressed) {
+  int idx = pastIndexAt(row);
+  if (idx < 0) return;
+  int x = PAST_ROW_X, y = PAST_ROW_Y + row * PAST_PITCH;
+  tft.fillRoundRect(x, y, PAST_ROW_W, PAST_ROW_H, 6, pressed ? COL_KEY_DOWN : COL_CARD);
+  tft.drawRoundRect(x - 1, y - 1, PAST_ROW_W + 2, PAST_ROW_H + 2, 7, COL_PINK_EDG);
+  char s[16];
+  snprintf(s, sizeof(s), "POST #%u", (unsigned)past[idx].num);
+  boldText(s, x + 10, y + (PAST_ROW_H - 14) / 2, 2, pressed ? ILI9341_WHITE : COL_NAME);
+  int cx = x + PAST_ROW_W - 12, cy = y + PAST_ROW_H / 2;   // ">"
+  tft.fillTriangle(cx - 5, cy - 6, cx - 5, cy + 6, cx + 2, cy, COL_PINK);
+}
+
+void drawPastArrow(bool up, bool pressed) {
+  int y = up ? PAST_UP_Y : PAST_DOWN_Y;
+  tft.fillRoundRect(PAST_ARROW_X, y, PAST_ARROW_W, PAST_ARROW_H, 8, pressed ? COL_KEY_DOWN : COL_PILL);
+  tft.drawRoundRect(PAST_ARROW_X - 1, y - 1, PAST_ARROW_W + 2, PAST_ARROW_H + 2, 9, COL_PINK_EDG);
+  int cx = PAST_ARROW_X + PAST_ARROW_W / 2, cy = y + PAST_ARROW_H / 2;
+  if (up) tft.fillTriangle(cx - 8, cy + 5, cx + 8, cy + 5, cx, cy - 6, COL_PINK);
+  else    tft.fillTriangle(cx - 8, cy - 5, cx + 8, cy - 5, cx, cy + 6, COL_PINK);
+}
+
+// The rows, arrows and page number (over whatever background is already there)
+void drawPastList() {
+  if (numPast == 0) {
+    tft.fillRoundRect(PAST_ROW_X, PAST_ROW_Y, PAST_ROW_W, PAST_ROW_H, 6, COL_CARD);
+    tft.drawRoundRect(PAST_ROW_X - 1, PAST_ROW_Y - 1, PAST_ROW_W + 2, PAST_ROW_H + 2, 7, COL_PINK_EDG);
+    centerIn(PAST_ROW_X, PAST_ROW_Y, PAST_ROW_W, PAST_ROW_H, "No posts yet", 1, COL_HINT);
+    return;
+  }
+  for (int i = 0; i < PAST_ROWS; i++) drawPastRow(i, false);
+  int pages = pastPages();
+  if (pastPage > 0) drawPastArrow(true, false);
+  if (pastPage < pages - 1) drawPastArrow(false, false);
+  char s[8];
+  snprintf(s, sizeof(s), "%d/%d", pastPage + 1, pages);
+  int midY = (PAST_UP_Y + PAST_ARROW_H + PAST_DOWN_Y) / 2;
+  centerIn(PAST_ARROW_X - 4, midY - 6, PAST_ARROW_W + 8, 12, s, 1, COL_LAVENDER);
+}
+
+void drawPastScreen() {
+  clearEmojiSpots();
+  tft.fillScreen(ILI9341_BLACK);   // outside the border stays black
+  drawBackground();
+  drawBigBack(PAST_BACK_Y, COL_KEY_SPEC);
+  boldText("PAST POSTS", PAST_TITLE_X, PAST_TITLE_Y, 2, COL_LAVENDER);
+  drawPastList();
+  drawBorder(COL_BORDER);
+  initSparkles(PAST_BOXES, 3, 24, 200);
+}
+
+// Called when opening the Past screen from TheSlap (starts at the newest posts)
+void showPast() {
+  pastPage = 0;
+  drawPastScreen();
+}
+
+// Back from a post: the same page as before
+void showPastAgain() {
+  pastPage = constrain(pastPage, 0, pastPages() - 1);
+  drawPastScreen();
+}
+
+// Switches page, redrawing only the list area
+void setPastPage(int page) {
+  pastPage = page;
+  drawBackground(PAST_LIST_X0, PAST_LIST_Y0, PAST_LIST_X1, PAST_LIST_Y1);
+  drawPastList();
+  drawBorder(COL_BORDER);          // the list area touches the border's curve
+}
+
+// Handles a tap on the list. Returns PAST_BACK (go to TheSlap), PAST_OPEN (show
+// past[pastOpen]), PAST_NONE (changed page) or PAST_MISS.
+int pastTap(int x, int y) {
+  // Generous tap area: everything under the list, around the pill
+  if (inRect(x, y, BIG_PILL_X - 30, PAST_LIST_Y1 + 1, BIG_PILL_X + BIG_PILL_W + 30, SCREEN_H - 1)) {
+    drawBigBack(PAST_BACK_Y, COL_KEY_DOWN);   // flash so you can see it registered
+    return PAST_BACK;
+  }
+  int ax0 = PAST_ARROW_X - 6, ax1 = PAST_ARROW_X + PAST_ARROW_W + 6;
+  if (pastPage > 0 && inRect(x, y, ax0, PAST_UP_Y - 4, ax1, PAST_UP_Y + PAST_ARROW_H + 8)) {
+    drawPastArrow(true, true);
+    setPastPage(pastPage - 1);
+    return PAST_NONE;
+  }
+  if (pastPage < pastPages() - 1 && inRect(x, y, ax0, PAST_DOWN_Y - 8, ax1, PAST_DOWN_Y + PAST_ARROW_H + 4)) {
+    drawPastArrow(false, true);
+    setPastPage(pastPage + 1);
+    return PAST_NONE;
+  }
+  for (int i = 0; i < PAST_ROWS; i++) {
+    int ry = PAST_ROW_Y + i * PAST_PITCH;
+    int idx = pastIndexAt(i);
+    // Hit box reaches into the gaps so taps between rows still count
+    if (idx >= 0 && inRect(x, y, PAST_ROW_X - 6, ry - 3, PAST_ROW_X + PAST_ROW_W + 4, ry + PAST_ROW_H + 2)) {
+      drawPastRow(i, true);
+      pastOpen = idx;
+      return PAST_OPEN;
+    }
+  }
+  return PAST_MISS;
+}
+
+void drawPastPostScreen() {
+  const PastPost& p = past[pastOpen];
+  clearEmojiSpots();
+  tft.fillScreen(ILI9341_BLACK);
+  drawBackground();
+  drawCard(BIG_BOX_H, BIG_STRIP_H);
+  drawBigBack(PP_BACK_Y, COL_KEY_SPEC);
+  int stripY = BOX_Y + BIG_BOX_H - BIG_STRIP_H;
+  fitText(p.text, TEXT_X, TEXT_Y, TEXT_W, stripY - 2 - TEXT_Y, COL_TEXT);
+  drawFeelingStrip(p.feeling, BOX_X, stripY, BOX_W, BIG_STRIP_H, 12, COL_CARD);
+  drawBorder(COL_BORDER);
+  initSparkles(PAST_POST_BOXES, 2, 60, 18);
+}
+
+// Called when a row on the list is tapped (pastOpen is already set)
+void showPastPost() {
+  drawPastPostScreen();
+}
+
+// Handles a tap on the single post screen. Returns PAST_POST_BACK or PAST_POST_MISS.
+int pastPostTap(int x, int y) {
+  // Generous tap area: everything under the card, around the pill
+  if (inRect(x, y, BIG_PILL_X - 30, BOX_Y + BIG_BOX_H + 3, BIG_PILL_X + BIG_PILL_W + 30, SCREEN_H - 1)) {
+    drawBigBack(PP_BACK_Y, COL_KEY_DOWN);
+    return PAST_POST_BACK;
+  }
+  return PAST_POST_MISS;
 }
 
 } // namespace slap
